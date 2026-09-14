@@ -405,6 +405,45 @@ async function importMessages(messages, { recordUnreadable = true } = {}) {
   return report;
 }
 
+//: Bump whenever the parser, merchant table or categories improve. Saved
+//: payments are then re-read once from their stored SMS text, so fixes reach
+//: history too; importing again wouldn't help, since duplicates are skipped.
+const PARSER_VERSION = 3;
+
+/** Re-read every saved SMS with the current parser.
+
+    Only what was inferred is refreshed: payee, shop and an automatic category.
+    Anything you set yourself (a category or a name) is left exactly as it is,
+    and amounts, dates, notes and "don't count" choices are never changed. */
+async function reparseSaved() {
+  const changed = [];
+  const rules = store.rules();
+  for (const t of store.allTransactions()) {
+    if (!t.raw_body || t.source === 'manual' || t.category_source === 'user') continue;
+    const parsed = parseSms(t.raw_body);
+    if (!parsed.ok) continue;
+    const fresh = buildRecord(parsed, t.source);
+    const decision = categorise({
+      merchantKey: fresh.merchant_key, merchantText: fresh.merchant_name,
+      direction: t.direction, instrument: fresh.instrument, isPerson: fresh.is_person, rules,
+    });
+    if (fresh.merchant_key === t.merchant_key && fresh.merchant_name === t.merchant_name
+        && decision.category === t.category) continue;
+    changed.push({
+      ...t,
+      counterparty_raw: fresh.counterparty_raw,
+      merchant_key: fresh.merchant_key,
+      merchant_name: fresh.merchant_name,
+      is_person: fresh.is_person,
+      instrument: fresh.instrument,
+      category: decision.category,
+      category_source: decision.source,
+    });
+  }
+  await store.updateTransactions(changed);
+  return changed.length;
+}
+
 /** Save every readable payment in pasted or shared text. */
 const importText = (text) => importMessages(splitMessages(text).map((body) => ({ body })));
 
@@ -465,7 +504,13 @@ async function importBackup(json) {
 /* --------------------------------------------------------------- api */
 
 export const api = {
-  init: () => store.open(),
+  async init() {
+    await store.open();
+    if (store.meta('parser_version') !== PARSER_VERSION) {
+      await reparseSaved();
+      await store.setMeta('parser_version', PARSER_VERSION);
+    }
+  },
 
   async overview(period = 'month') {
     const [start, end] = rangeFor(period);

@@ -74,7 +74,8 @@ check('money: paise never drift', () => {
 check('money: negative amounts are refused', () =>
   parsePaise('-5') === null ? [] : [`-5 parsed as ${parsePaise('-5')}`]);
 check('money: Indian grouping', () => {
-  const cases = [[12999900, '₹1,29,999'], [24000, '₹240'], [1000000, '₹10,000']];
+  // Paise must never be dropped: ₹264.88 was once shown as ₹264.
+  const cases = [[12999900, '₹1,29,999'], [24000, '₹240'], [1000000, '₹10,000'], [26488, '₹264.88'], [2000, '₹20'], [5, '₹0.05']];
   return cases.filter(([p, t]) => formatInr(p) !== t).map(([p, t]) => `${p} -> ${formatInr(p)} ≠ ${t}`);
 });
 

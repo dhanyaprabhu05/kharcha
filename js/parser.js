@@ -180,6 +180,10 @@ export function extractInstrument(body) {
 
 const VPA_RE = /\b([a-z0-9][\w.\-]{1,48}@[a-z]{2,20})\b/i;
 
+//: Union Bank names the payee after "Fvg:" (favouring), truncated to about 8
+//: characters: "... ref no , Fvg: ZOMATO L Avl Bal Rs:28893.90."
+const FAVOURING_RE = /\b(?:fvg|favouring|favoring|favour|favor)\s*[:\-]\s*([A-Za-z0-9][A-Za-z0-9&'.\-\/ ]{0,60}?)(?=\s+(?:avl|avbl|bal|balance|not\s+you|ref|on)\b|\s*[.;,|]|\s*$)/i;
+
 //: ICICI's current format names the payee before "credited":
 //:   "debited for Rs 250.00 on 12-Sep-25; ZOMATO credited."
 const ICICI_PAYEE_RE = /;\s*([A-Za-z0-9][A-Za-z0-9&'.\- ]{1,70}?)\s+credited\b/i;
@@ -235,6 +239,12 @@ export function extractCounterparty(body, direction = DEBIT) {
   // Ordered by reliability: a VPA is unambiguous; a bare "to X" is weakest.
   const vpa = body.match(VPA_RE);
   if (vpa) return cleanCounterparty(vpa[1]);
+
+  const favouring = body.match(FAVOURING_RE);
+  if (favouring) {
+    const candidate = cleanCounterparty(favouring[1]);
+    if (candidate) return candidate;
+  }
 
   const icici = body.match(ICICI_PAYEE_RE);
   if (icici) {

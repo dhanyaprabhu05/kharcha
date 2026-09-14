@@ -22,8 +22,10 @@ export function parsePaise(raw) {
   return paise > 0 ? paise : null;
 }
 
-/** 12345600 -> "₹1,23,456" (Indian digit grouping). */
-export function formatInr(paise, { decimals = false } = {}) {
+/** 12345600 -> "₹1,23,456" (Indian digit grouping).
+    decimals: 'auto' (default) shows paise only when there are some, so
+    ₹264.88 is never displayed as ₹264. true/false force it on or off. */
+export function formatInr(paise, { decimals = 'auto' } = {}) {
   if (paise === null || paise === undefined) return '—';
   const negative = paise < 0;
   const value = Math.abs(Math.round(paise));
@@ -42,6 +44,6 @@ export function formatInr(paise, { decimals = false } = {}) {
     if (head) groups.unshift(head);
     text = groups.concat(tail).join(',');
   }
-  if (decimals) text += '.' + String(rest).padStart(2, '0');
+  if (decimals === true || (decimals === 'auto' && rest !== 0)) text += '.' + String(rest).padStart(2, '0');
   return (negative ? '-' : '') + '₹' + text;
 }

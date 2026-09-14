@@ -7,9 +7,34 @@
    failed payment, collect request) and never become a transaction. */
 
 export const FIXTURES = [
+  // ------------------------------------------ Union Bank of India, debits
+  // Real messages from the phone this app is used with. The payee follows
+  // "Fvg:" (favouring) and is cut to 8 characters.
+  {
+    name: 'Union Bank debit to Zomato (real message)',
+    body: 'Union Bank of India A/c *7165 Debited Rs:264.88 on 11-09-2026 18:29:30 by Mob Bk ref no , Fvg: ZOMATO L Avl Bal Rs:28893.90. Not you?Call 18002333/SMS BLOCK 7165 to 8879365472',
+    expect: { amount: 26488, direction: 'debit', account: '7165', merchant: 'zomato', category: 'food_delivery', day: '2026-09-11', time: '18:29:30' },
+  },
+  {
+    name: 'Union Bank debit to JustVend (real message)',
+    body: 'Union Bank of India A/c *7165 Debited Rs:20.00 on 08-09-2026 17:50:11 by Mob Bk ref no , Fvg: JUSTVEND Avl Bal Rs:54336.03. Not you?Call 18002333/SMS BLOCK 7165 to 8879365472',
+    expect: { amount: 2000, direction: 'debit', account: '7165', merchant: 'justvend', merchantName: 'JustVend', category: 'eating_out', day: '2026-09-08', time: '17:50:11' },
+  },
+  // The same format with other payees, as the 8-character cut would show them.
+  { name: 'Union Bank: "BUNDL TE" is Swiggy', body: 'Union Bank of India A/c *7165 Debited Rs:312.00 on 12-09-2026 20:10:05 by Mob Bk ref no 525512341001, Fvg: BUNDL TE Avl Bal Rs:28581.90. Not you?Call 18002333/SMS BLOCK 7165 to 8879365472', expect: { merchant: 'swiggy', category: 'food_delivery' } },
+  { name: 'Union Bank: "SWIGGY I" is Instamart, not Swiggy', body: 'Union Bank of India A/c *7165 Debited Rs:412.00 on 12-09-2026 21:10:05 by Mob Bk ref no , Fvg: SWIGGY I Avl Bal Rs:28169.90. Not you?Call 18002333/SMS BLOCK 7165 to 8879365472', expect: { merchant: 'swiggyinstamart', category: 'groceries' } },
+  { name: 'Union Bank: "KIRANAKA" is Zepto', body: 'Union Bank of India A/c *7165 Debited Rs:389.00 on 12-09-2026 09:10:05 by Mob Bk ref no , Fvg: KIRANAKA Avl Bal Rs:27780.90. Not you?Call 18002333/SMS BLOCK 7165 to 8879365472', expect: { merchant: 'zepto', category: 'groceries' } },
+  { name: 'Union Bank: "UBER IND" is Uber', body: 'Union Bank of India A/c *7165 Debited Rs:189.00 on 12-09-2026 08:10:05 by Mob Bk ref no , Fvg: UBER IND Avl Bal Rs:27591.90. Not you?Call 18002333/SMS BLOCK 7165 to 8879365472', expect: { merchant: 'uber', category: 'transport' } },
+  { name: 'Union Bank: "ROPPEN T" is Rapido', body: 'Union Bank of India A/c *7165 Debited Rs:64.00 on 12-09-2026 08:30:05 by Mob Bk ref no , Fvg: ROPPEN T Avl Bal Rs:27527.90. Not you?Call 18002333/SMS BLOCK 7165 to 8879365472', expect: { merchant: 'rapido', category: 'transport' } },
+  { name: 'Union Bank: "ANI TECH" is Ola', body: 'Union Bank of India A/c *7165 Debited Rs:240.00 on 12-09-2026 08:40:05 by Mob Bk ref no , Fvg: ANI TECH Avl Bal Rs:27287.90. Not you?Call 18002333/SMS BLOCK 7165 to 8879365472', expect: { merchant: 'ola', category: 'transport' } },
+  { name: 'Union Bank: "NAMMA YA" is Namma Yatri', body: 'Union Bank of India A/c *7165 Debited Rs:80.00 on 12-09-2026 08:50:05 by Mob Bk ref no , Fvg: NAMMA YA Avl Bal Rs:27207.90. Not you?Call 18002333/SMS BLOCK 7165 to 8879365472', expect: { merchant: 'nammayatri', category: 'transport' } },
+  { name: 'Union Bank: "BLINK CO" is Blinkit', body: 'Union Bank of India A/c *7165 Debited Rs:540.00 on 12-09-2026 19:05:05 by Mob Bk ref no , Fvg: BLINK CO Avl Bal Rs:26667.90. Not you?Call 18002333/SMS BLOCK 7165 to 8879365472', expect: { merchant: 'blinkit', category: 'groceries' } },
+  { name: 'Union Bank: "RELIANCE" is too ambiguous to guess', body: 'Union Bank of India A/c *7165 Debited Rs:299.00 on 12-09-2026 19:15:05 by Mob Bk ref no , Fvg: RELIANCE Avl Bal Rs:26368.90. Not you?Call 18002333/SMS BLOCK 7165 to 8879365472', expect: { merchant: 'reliance', category: 'other' } },
+  { name: 'Union Bank: a person stays uncategorised', body: 'Union Bank of India A/c *7165 Debited Rs:500.00 on 12-09-2026 19:25:05 by Mob Bk ref no , Fvg: RAHUL KU Avl Bal Rs:25868.90. Not you?Call 18002333/SMS BLOCK 7165 to 8879365472', expect: { amount: 50000, category: 'other' } },
+
   // ------------------------------------------------------- Union Bank of India
-  // The format actually received on the phone this app is used with. Every
-  // message ends in a safety footer naming OTP/PIN/CVV, and none name a payee.
+  // The same bank's credit format. Its safety footer names OTP/PIN/CVV, and
+  // it doesn't name who sent the money.
   {
     name: 'Union Bank credit (real message, digits changed)',
     body: 'A/c *7165 Credited for Rs:30.00 on 07-09-2026 12:16:54 by Mob Bk ref no 525512340001 Avl Bal Rs:1520.45 .Never Share OTP/PIN/CVV-Union Bank of India',

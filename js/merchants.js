@@ -31,7 +31,7 @@ const CITIES = new Set(['bangalore', 'bengaluru', 'mumbai', 'delhi', 'chennai',
 
 /* [pattern, display name]. Patterns are whole-word, checked in order, so the
    more specific ones (Swiggy Instamart) sit above the general (Swiggy). */
-const ALIASES = [
+const ALIAS_LIST = [
   // Legal entity names that UPI shows instead of the brand.
   ['bundl technologies', 'Swiggy'], ['bundl', 'Swiggy'],
   ['kiranakart', 'Zepto'], ['blink commerce', 'Blinkit'],
@@ -83,7 +83,37 @@ const ALIASES = [
   ['hindustan petroleum', 'HP Petrol'], ['hpcl', 'HP Petrol'], ['shell', 'Shell'],
   ['fastag', 'FASTag'], ['zerodha', 'Zerodha'], ['groww', 'Groww'],
   ['upstox', 'Upstox'], ['dream11', 'Dream11'],
-].map(([pattern, name]) => [new RegExp(`\\b${pattern.replace(/\s+/g, '\\s+')}\\b`), name]);
+  // Vending machines, common on campuses and in offices.
+  ['justvend', 'JustVend'], ['daalchini', 'Daalchini'], ['vendiman', 'Vendiman'],
+];
+
+const ALIASES = ALIAS_LIST.map(([pattern, name]) => [new RegExp(`\\b${pattern.replace(/\s+/g, '\\s+')}\\b`), name]);
+
+//: Aliases too generic to match from a truncated fragment. "INDIAN R" could be
+//: IRCTC or an Indian restaurant; "ETERNAL " could be Zomato or a café.
+const NO_PREFIX = new Set(['innovative retail concepts', 'supermarket grocery supplies',
+  'avenue supermarts', 'indian railway catering', 'eternal limited', 'eternal ltd',
+  'delightful gourmet', 'connaught plaza restaurants', 'prime video', 'air india']);
+
+//: Plain-text aliases usable for prefix matching (regex-style ones excluded).
+const PREFIXABLE = ALIAS_LIST
+  .filter(([pattern]) => !/[?'*]/.test(pattern) && !NO_PREFIX.has(pattern))
+  .map(([pattern, name]) => [pattern, name]);
+
+//: Union Bank cuts payee names to 8 characters. A fragment this long that is
+//: the start of exactly one known merchant is that merchant; anything shorter,
+//: or matching several ("RELIANCE" = Fresh? Digital? Jio?), is left alone.
+const MIN_FRAGMENT = 7;
+
+function aliasForFragment(fragment) {
+  if (!fragment || fragment.length < MIN_FRAGMENT) return null;
+  const names = new Set(
+    PREFIXABLE
+      .filter(([pattern]) => pattern.length > fragment.length && pattern.startsWith(fragment))
+      .map(([, name]) => name),
+  );
+  return names.size === 1 ? [...names][0] : null;
+}
 
 const PHONE_VPA_RE = /^(?:\+?91)?[6-9]\d{9}$/;
 
@@ -149,8 +179,13 @@ export function clean(raw) {
 }
 
 function aliasFor(raw) {
-  // Check the fuller form first, so "Ani Technologies" can match while plain
-  // "Ani Sweets" does not.
+  // A truncated name first: "SWIGGY I" is Swiggy Instamart, not Swiggy, and
+  // "KIRANAKA" (Kiranakart) is Zepto though no whole alias appears in it.
+  const fragment = aliasForFragment(normalise(raw));
+  if (fragment) return fragment;
+
+  // Then whole-word matches, fuller form first, so "Ani Technologies" can
+  // match while plain "Ani Sweets" does not.
   for (const candidate of [normalise(raw), clean(raw)]) {
     if (!candidate) continue;
     for (const [pattern, name] of ALIASES) {
