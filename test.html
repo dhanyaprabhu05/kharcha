@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kharcha tests</title>
+<style>
+  body { font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 16px; background: #f4f5f7; color: #111; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .summary { font-size: 15px; font-weight: 700; margin: 8px 0 14px; }
+  .pass { color: #14855c; } .fail { color: #cc3a3a; }
+  .row { background: #fff; border: 1px solid #e3e6ea; border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; }
+  .row.fail { border-color: #cc3a3a; }
+  .detail { font-size: 12px; color: #59616d; margin-top: 3px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Kharcha parser tests</h1>
+<div class="summary" id="summary">Running…</div>
+<div id="out"></div>
+
+<script type="module">
+import { FIXTURES } from './tests/fixtures.js';
+import { parseSms, splitMessages } from './js/parser.js';
+import { resolveMerchant } from './js/merchants.js';
+import { categorise, selfCheck } from './js/categories.js';
+import { parsePaise, formatInr } from './js/money.js';
+
+const results = [];
+
+function check(name, fn) {
+  try {
+    const problems = fn() || [];
+    results.push({ name, ok: problems.length === 0, problems });
+  } catch (err) {
+    results.push({ name, ok: false, problems: [`threw: ${err.message}`] });
+  }
+}
+
+/* ---- SMS fixtures ---- */
+for (const fx of FIXTURES) {
+  check(fx.name, () => {
+    const parsed = parseSms(fx.body);
+    if (fx.expect === null) {
+      return parsed.ok ? [`should be rejected, but parsed as ${formatInr(parsed.amountPaise)}`] : [];
+    }
+    if (!parsed.ok) return [`rejected: ${parsed.reason}`];
+
+    const e = fx.expect;
+    const merchant = resolveMerchant(parsed.counterparty);
+    const decision = categorise({
+      merchantKey: merchant.key, merchantText: merchant.name,
+      direction: parsed.direction, instrument: parsed.instrument, isPerson: merchant.isPerson,
+    });
+    const problems = [];
+    if (e.amount !== undefined && parsed.amountPaise !== e.amount) problems.push(`amount ${parsed.amountPaise} ≠ ${e.amount}`);
+    if (e.direction && parsed.direction !== e.direction) problems.push(`direction ${parsed.direction} ≠ ${e.direction}`);
+    if (e.account && parsed.accountTail !== e.account) problems.push(`account ${parsed.accountTail} ≠ ${e.account}`);
+    if (e.merchant && merchant.key !== e.merchant) problems.push(`merchant '${merchant.key}' ≠ '${e.merchant}' (raw: ${parsed.counterparty})`);
+    if (e.merchantName && merchant.name !== e.merchantName) problems.push(`name '${merchant.name}' ≠ '${e.merchantName}'`);
+    if (e.category && decision.category !== e.category) problems.push(`category ${decision.category} ≠ ${e.category} (merchant ${merchant.key})`);
+    if (e.day && parsed.day !== e.day) problems.push(`day ${parsed.day} ≠ ${e.day}`);
+    return problems;
+  });
+}
+
+/* ---- money ---- */
+check('money: paise never drift', () => {
+  const total = Array.from({ length: 10 }, () => parsePaise('0.10')).reduce((a, b) => a + b, 0);
+  return total === 100 ? [] : [`ten 10p = ${total}`];
+});
+check('money: negative amounts are refused', () =>
+  parsePaise('-5') === null ? [] : [`-5 parsed as ${parsePaise('-5')}`]);
+check('money: Indian grouping', () => {
+  const cases = [[12999900, '₹1,29,999'], [24000, '₹240'], [1000000, '₹10,000']];
+  return cases.filter(([p, t]) => formatInr(p) !== t).map(([p, t]) => `${p} -> ${formatInr(p)} ≠ ${t}`);
+});
+
+/* ---- merchant resolution ---- */
+check('merchants: one merchant, many spellings', () => {
+  const spellings = ['ZOMATO', 'zomato@ybl', 'PAYTM*ZOMATO', 'Zomato Ltd',
+    'ZOMATO LIMITED BANGALORE', 'RAZORPAY*Zomato', 'Eternal Limited'];
+  const keys = new Set(spellings.map((s) => resolveMerchant(s).key));
+  return keys.size === 1 && keys.has('zomato') ? [] : [`keys: ${[...keys].join(', ')}`];
+});
+check('merchants: legal names resolve to brands', () => {
+  const cases = [['BUNDL TECHNOLOGIES PRIVATE LIMITED', 'Swiggy'], ['KIRANAKART TECHNOLOGIES PVT LTD', 'Zepto'],
+    ['BLINK COMMERCE PVT LTD', 'Blinkit'], ['ANI TECHNOLOGIES PVT LTD', 'Ola'],
+    ['BIGTREE ENTERTAINMENT PVT LTD', 'BookMyShow'], ['JUBILANT FOODWORKS LTD', "Domino's"],
+    ["MCDONALD'S", "McDonald's"], ["DOMINO'S PIZZA", "Domino's"]];
+  return cases.filter(([raw, want]) => resolveMerchant(raw).name !== want)
+    .map(([raw, want]) => `${raw} -> ${resolveMerchant(raw).name} ≠ ${want}`);
+});
+check('merchants: aliases match whole words only', () => {
+  // The substring bug: "ola" inside "Coca Cola", "ani" inside "Ani Sweets".
+  const cases = [['COCA COLA BEVERAGES', 'ola'], ['ANI SWEETS', 'ola'], ['SHELLFISH HOUSE', 'shell']];
+  return cases.filter(([raw, bad]) => resolveMerchant(raw).key === bad)
+    .map(([raw, bad]) => `${raw} wrongly became ${bad}`);
+});
+check('merchants: a phone-number VPA is a person', () =>
+  resolveMerchant('9876543210@ybl').isPerson ? [] : ['not detected']);
+check('merchants: names are readable', () => {
+  const cases = [['SRI LAKSHMI STORES', 'Sri Lakshmi'], ['KFC', 'KFC'], ['RAHUL KUMAR', 'Rahul Kumar']];
+  return cases.filter(([raw, want]) => resolveMerchant(raw).name !== want)
+    .map(([raw, want]) => `${raw} -> '${resolveMerchant(raw).name}' ≠ '${want}'`);
+});
+
+/* ---- categories ---- */
+check('categories: every rule points at a real category', () => selfCheck());
+check('categories: keyword rules use whole words', () => {
+  const bad = [];
+  const current = categorise({ merchantKey: 'x', merchantText: 'Current Electronics', direction: 'debit' });
+  if (current.category === 'rent') bad.push('"Current" read as rent');
+  const smart = categorise({ merchantKey: 'y', merchantText: 'Smartphone Hub', direction: 'debit' });
+  if (smart.category === 'groceries') bad.push('"Smartphone" read as groceries');
+  return bad;
+});
+check('categories: a user correction beats everything', () => {
+  const d = categorise({ merchantKey: 'zomato', merchantText: 'Zomato', direction: 'debit', rules: { zomato: 'eating_out' } });
+  return d.category === 'eating_out' && d.source === 'user' ? [] : [JSON.stringify(d)];
+});
+
+/* ---- splitting a paste ---- */
+check('paste: two SMS separated by a blank line', () => {
+  const text = `${FIXTURES[0].body}\n\n${FIXTURES[1].body}`;
+  const parts = splitMessages(text);
+  return parts.length === 2 ? [] : [`got ${parts.length}`];
+});
+check('paste: two SMS on consecutive lines', () => {
+  const text = `${FIXTURES[0].body}\n${FIXTURES[1].body}`;
+  const parts = splitMessages(text);
+  return parts.length === 2 ? [] : [`got ${parts.length}`];
+});
+check('paste: one SMS that wrapped over two lines stays one', () => {
+  const body = FIXTURES[0].body;
+  const cut = body.indexOf('; ');
+  const parts = splitMessages(body.slice(0, cut) + '\n' + body.slice(cut));
+  return parts.length === 1 ? [] : [`got ${parts.length}`];
+});
+
+/* ---- render ---- */
+const passed = results.filter((r) => r.ok).length;
+const failed = results.length - passed;
+document.getElementById('summary').innerHTML =
+  `<span class="${failed ? 'fail' : 'pass'}">${passed} passed, ${failed} failed</span> of ${results.length}`;
+document.getElementById('out').innerHTML = results
+  .sort((a, b) => a.ok - b.ok)
+  .map((r) => `<div class="row ${r.ok ? '' : 'fail'}">
+      <span class="${r.ok ? 'pass' : 'fail'}">${r.ok ? '✓' : '✗'}</span> ${r.name}
+      ${r.problems.length ? `<div class="detail">${r.problems.join('\n')}</div>` : ''}
+    </div>`).join('');
+window.__results = { passed, failed, total: results.length, failures: results.filter((r) => !r.ok) };
+</script>
+</body>
+</html>
