@@ -93,8 +93,19 @@ export async function addTransactions(rows) {
   if (!fresh.length) return [];
   const tx = db.transaction('transactions', 'readwrite');
   const store = tx.objectStore('transactions');
-  const pending = fresh.map((row) => request(store.add(row)).then((id) => ({ ...row, id })));
-  const saved = await Promise.all(pending);
+  const saved = [];
+  for (const row of fresh) {
+    const req = store.add(row);
+    req.onsuccess = () => saved.push({ ...row, id: req.result });
+    req.onerror = (event) => {
+      // Already saved by an import that finished a moment earlier: skip this
+      // one row instead of failing (and rolling back) the whole batch.
+      if (req.error && req.error.name === 'ConstraintError') {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+  }
   await done(tx);
   saved.forEach((row) => cache.transactions.set(row.id, row));
   return saved;

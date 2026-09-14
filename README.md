@@ -9,7 +9,33 @@ and shows what you spent today, this week and this month.
 
 ---
 
-## Install it on your phone
+## The Android app (reads your SMS by itself)
+
+A website can't read SMS, so there is also a small Android app. It's the same
+code as the website, wrapped so it can read the inbox itself. You build it on
+your own laptop and install it over a USB cable. There's no store and no APK
+downloaded from anywhere.
+
+- It reads **only bank sender IDs** (`VK-UNIONB`, `AD-ICICIB`, …). Chats from
+  people are filtered out in the Android code, before the app ever sees them.
+- It asks for **read SMS only**, and has **no internet permission**, so nothing
+  it reads can leave the phone.
+- New payments appear **every time you open it**. While it's open on screen, a
+  new bank SMS shows up within a couple of seconds. Nothing runs in the
+  background, so it costs no battery.
+
+Build and install (needs Android Studio's SDK and Python; the phone needs USB
+debugging on):
+
+```bash
+python android/build.py --install
+```
+
+The first build creates a signing key in `android/signing/`. **Keep that
+folder.** Android only accepts updates signed with the same key. It's
+git-ignored and must never be committed.
+
+## Install it on your phone (website)
 
 1. Open the app's address in **Chrome** on your Android phone.
 2. Tap **⋮ → Install app** (or **Add to Home screen**).
@@ -48,11 +74,15 @@ Older SMS are fine to add. Kharcha uses the date written in the message, and it
 never saves the same SMS twice: bank alerts carry their own reference number,
 so adding one twice cannot double-count it.
 
-## Banks that don't name the payee (Union Bank)
+## Union Bank of India
 
-Union Bank of India's alerts say how much and when, but never who you paid:
-`A/c *7165 Debited for Rs:250.00 on 08-09-2026 13:05:10 by Mob Bk ...`. Kharcha
-still gets the amount, date and time exactly right. For *what it was on*, tap
+Union Bank debits name the payee after `Fvg:`, cut to 8 letters:
+`Debited Rs:264.88 on 11-09-2026 18:29:30 by Mob Bk ref no , Fvg: ZOMATO L`.
+Kharcha matches those cut-off names: `ZOMATO L` is Zomato, `ROPPEN T` is
+Rapido, `BUNDL TE` is Swiggy, `NAMMA YA` is Namma Yatri.
+
+Some alerts (credits, and some older debits) say only how much and when. For
+*what it was on*, tap
 **Sort** on the Today screen: one payment at a time, one tap for a category, and
 an optional name. Every name you type ("Canteen", "Auto") becomes a one-tap
 button, so regular spots take a single tap from the second time on.
@@ -97,8 +127,8 @@ Transportation* is Rapido, *Blink Commerce* is Blinkit, and so on.
 
 ## Honest limits
 
-- It only knows about payments you paste or share. A payment you skip is
-  missing.
+- The website only knows about payments you paste, share or import. The
+  Android app reads them itself.
 - A bank that changes its SMS wording may need the parser updated. When a
   message can't be read, you're told why instead of it being silently dropped.
 - UPI sometimes shows a person's name with nothing to say whether it's a shop.
@@ -130,5 +160,8 @@ js/categories.js    your corrections > known shops > keywords
 js/api.js           summaries, refunds, backup; all local
 js/store.js         IndexedDB
 js/views.js         screens and sheets
+js/native.js        bridge to the Android app (inert on the website)
 test.html           parser tests, run in the browser
+tests/native-mock.html  the app with a fake Android bridge, for testing
+android/            the Android wrapper: one Java file + build.py (no Gradle)
 ```

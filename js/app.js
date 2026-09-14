@@ -1,10 +1,11 @@
 /* App shell: start-up, share handling, tabs, theme, offline support. */
 
 import { api } from './api.js';
-import { toast } from './ui.js';
+import { isNative, setBars } from './native.js';
+import { closeTopSheet, toast } from './ui.js';
 import {
   loadCategories, openAddSheet, openSettings, renderList, renderMonth,
-  renderRepeat, renderToday, saveText, setRefresher,
+  renderRepeat, renderToday, saveText, setRefresher, syncFromDevice,
 } from './views.js';
 
 const view = document.getElementById('view');
@@ -28,6 +29,7 @@ function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute('content', theme === 'dark' ? '#0d1117' : '#f4f5f7');
+  setBars(theme === 'dark' ? '#0d1117' : '#f4f5f7', theme === 'dark');
 }
 
 function initTheme() {
@@ -82,12 +84,22 @@ async function boot() {
   setRoute('today');
   await handleLaunchParams();
 
+  if (isNative) {
+    // Android: read new bank SMS now, and every time the app comes back.
+    window.__kharchaBack = () => closeTopSheet();
+    window.addEventListener('kharcha-resume', () => { syncFromDevice(); });
+    // A bank SMS arriving while Kharcha is on screen shows up within seconds.
+    window.addEventListener('kharcha-sms', () => { syncFromDevice(); });
+    await syncFromDevice();
+  }
+
   // Coming back to the app is usually right after paying; refresh the numbers.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') ROUTES[current](view);
   });
 
-  if ('serviceWorker' in navigator && window.isSecureContext) {
+  // The Android app bundles every file already, so it needs no offline cache.
+  if (!isNative && 'serviceWorker' in navigator && window.isSecureContext) {
     // When an update takes over, reload once so it's used straight away,
     // instead of only on the next launch. Skipped on the very first install,
     // when the page already came from the network and there's nothing to swap.
@@ -100,7 +112,9 @@ async function boot() {
     });
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
-  window.addEventListener('offline', () => toast('You are offline. Kharcha still works: it never needs the internet.'));
+  if (!isNative) {
+    window.addEventListener('offline', () => toast('You are offline. Kharcha still works: it never needs the internet.'));
+  }
 }
 
 boot();

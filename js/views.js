@@ -2,8 +2,9 @@
 
 import { api } from './api.js';
 import { loadDemo } from './demo.js';
+import { hasSmsPermission, isNative, requestSmsPermission, saveTextFile } from './native.js';
 import {
-  dayLabel, empty, errorCard, esc, h, inr, loading, sheet, timeLabel, toast,
+  dayLabel, empty, errorCard, esc, h, inr, loading, sheet, sinceLabel, timeLabel, toast,
 } from './ui.js';
 
 let CATEGORIES = [];
@@ -25,10 +26,16 @@ export async function renderToday(root) {
     const [data, stats] = await Promise.all([api.overview('today'), api.stats()]);
 
     if (stats.transactions === 0) {
-      root.innerHTML = onboarding();
-      wireOnboarding(root);
+      if (isNative) {
+        root.innerHTML = nativeOnboarding();
+        wireNativeOnboarding(root);
+      } else {
+        root.innerHTML = onboarding();
+        wireOnboarding(root);
+      }
       return;
     }
+    const smsOff = isNative && !hasSmsPermission();
 
     const s = data.summary;
     const delta = s.today.vs_yesterday_paise;
@@ -49,8 +56,14 @@ export async function renderToday(root) {
         </div>
       </div>
 
-      ${pasteButton()}
-      ${stats.last_backup_import ? `
+      ${smsOff ? `
+        <div class="banner" style="margin-top:12px">
+          <span>📵</span><span class="grow">SMS access is off, so new payments won't appear.</span>
+          <button id="allow-sms-again">Turn on</button>
+        </div>` : ''}
+      ${isNative && !smsOff ? nativeStatus(api.deviceLastChecked()) : ''}
+      ${isNative ? '' : pasteButton()}
+      ${!isNative && stats.last_backup_import ? `
         <button class="btn btn-ghost btn-sm btn-block" id="catch-up" style="margin-top:10px">
           📥 Catch up from latest SMS backup
         </button>` : ''}
@@ -80,9 +93,129 @@ export async function renderToday(root) {
     if (catchUp) catchUp.addEventListener('click', openImportBackup);
     const sortNow = root.querySelector('#sort-now');
     if (sortNow) sortNow.addEventListener('click', openSorter);
+    const resync = root.querySelector('#resync');
+    if (resync) resync.addEventListener('click', () => syncFromDevice({ announce: true }));
+    const allowAgain = root.querySelector('#allow-sms-again');
+    if (allowAgain) {
+      allowAgain.addEventListener('click', async () => {
+        if (await requestSmsPermission()) await syncFromDevice({ announce: true, full: true });
+        else toast('Turn it on in Settings → Apps → Kharcha → Permissions → SMS.', 'bad');
+      });
+    }
   } catch (err) {
     showError(root, err, () => renderToday(root));
   }
+}
+
+/* Android app: the one real setup step is letting it read bank SMS. */
+function nativeOnboarding() {
+  return `
+    <div class="hero" style="text-align:left">
+      <div class="label" style="text-align:center">Welcome to Kharcha</div>
+      <div style="font-size:21px;font-weight:700;letter-spacing:-.02em;margin:10px 0 12px;text-align:center">
+        See where your money goes
+      </div>
+      <ol class="steps">
+        <li>Allow Kharcha to read your SMS.</li>
+        <li>It finds every bank payment already on your phone and files it.</li>
+        <li>From then on, new payments appear every time you open it. Nothing to paste, nothing to import.</li>
+      </ol>
+    </div>
+    <button class="btn btn-primary btn-block" id="allow-sms" style="margin-top:14px">Allow SMS access</button>
+    <div id="allow-result"></div>
+    <div class="notice info" style="margin-top:16px">
+      <span class="ico">🔒</span>
+      <div>Kharcha only looks at messages from <strong>bank sender IDs</strong>. Your chats are never
+      read, OTPs are refused, and this app has <strong>no internet access at all</strong>, so nothing
+      it reads can ever leave your phone.</div>
+    </div>
+    <div style="text-align:center;margin-top:16px">
+      <button class="btn btn-ghost btn-sm" id="load-demo">Try it with sample data first</button>
+    </div>`;
+}
+
+function wireNativeOnboarding(root) {
+  root.querySelector('#allow-sms').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const result = root.querySelector('#allow-result');
+    const granted = await requestSmsPermission();
+    if (!granted) {
+      result.innerHTML = `
+        <div class="notice" style="margin-top:12px"><span class="ico">⚠️</span>
+          <div>Without SMS access Kharcha can't see your payments. If Android no longer shows the
+          prompt, open <strong>Settings → Apps → Kharcha → Permissions → SMS</strong> and choose Allow.
+          You can still add payments by hand with <strong>+</strong>.</div></div>`;
+      return;
+    }
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner"></span> Reading your bank SMS…';
+    // Hold the sync guard: Android resumes the app as the permission prompt
+    // closes, and that check has nothing to add while this one runs.
+    syncing = true;
+    let report;
+    try {
+      report = await api.importFromDevice({ full: true });
+    } finally {
+      syncing = false;
+      if (syncAgain) {
+        syncAgain = false;
+        syncFromDevice();
+      }
+    }
+    const found = report.added.length + report.duplicates;
+    toast(found
+      ? `Found ${found} payment${found === 1 ? '' : 's'} in your SMS${sinceLabel(report.from)}.`
+      : 'No bank payments found in your SMS yet.', found ? 'good' : '');
+    refreshCurrent();
+  });
+  root.querySelector('#load-demo').addEventListener('click', async (event) => {
+    event.currentTarget.disabled = true;
+    const count = await loadDemo();
+    toast(`Loaded ${count} sample payments.`, 'good');
+    refreshCurrent();
+  });
+}
+
+/** Android app: pick up any bank SMS that arrived since the last check. */
+let syncing = false;
+let syncAgain = false;
+export async function syncFromDevice({ announce = false, full = false } = {}) {
+  if (!isNative || !hasSmsPermission()) return null;
+  if (syncing) {
+    // An SMS landed mid-check: look once more when this check finishes.
+    syncAgain = true;
+    return null;
+  }
+  syncing = true;
+  try {
+    const report = await api.importFromDevice({ full });
+    const added = report.added;
+    if (added.length === 1) {
+      toast(`New: ${added[0].amount_display} · ${added[0].merchant_name} (${added[0].category_label})`, 'good');
+    } else if (added.length > 1) {
+      toast(`${added.length} new payments added from your SMS.`, 'good');
+    } else if (announce) {
+      toast('Up to date. No new payments.');
+    }
+    if (added.length || announce) refreshCurrent();
+    return report;
+  } finally {
+    syncing = false;
+    if (syncAgain) {
+      syncAgain = false;
+      syncFromDevice();
+    }
+  }
+}
+
+/** Android app: a quiet status line in place of the paste button. */
+function nativeStatus(lastChecked) {
+  const when = lastChecked ? timeLabel(lastChecked) : '';
+  return `
+    <div class="paste-hint" style="margin-top:12px;display:flex;justify-content:center;align-items:center;gap:8px">
+      <span>✓ Up to date with your SMS${when ? ` · checked ${esc(when)}` : ''}</span>
+      <button class="btn btn-ghost btn-sm" id="resync" style="padding:4px 10px">Check now</button>
+    </div>`;
 }
 
 function onboarding() {
@@ -881,14 +1014,18 @@ export async function openSettings() {
 
   sheet(`
     <h2>Kharcha</h2>
-    <p class="sub">${stats.transactions} payment${stats.transactions === 1 ? '' : 's'} saved${stats.tracking_since ? ` since ${esc(dayLabel(stats.tracking_since))}` : ''} · ${stats.merchant_rules} shop${stats.merchant_rules === 1 ? '' : 's'} you've taught it</p>
+    <p class="sub">${stats.transactions} payment${stats.transactions === 1 ? '' : 's'} saved${esc(sinceLabel(stats.tracking_since))} · ${stats.merchant_rules} shop${stats.merchant_rules === 1 ? '' : 's'} you've taught it</p>
 
     <div class="card">
-      <button class="settings-row" id="import-backup">
-        <span>📥</span><span class="sr-main">Import SMS backup<div class="sr-sub">${stats.last_backup_import
-          ? `Last imported ${esc(dayLabel(stats.last_backup_import.slice(0, 10)))}`
-          : 'Add all your past bank SMS at once'}</div></span>
-      </button>
+      ${isNative ? `
+        <button class="settings-row" id="rescan-sms">
+          <span>🔄</span><span class="sr-main">Read all my SMS again<div class="sr-sub">Goes through the whole inbox; nothing is counted twice</div></span>
+        </button>` : `
+        <button class="settings-row" id="import-backup">
+          <span>📥</span><span class="sr-main">Import SMS backup<div class="sr-sub">${stats.last_backup_import
+            ? `Last imported ${esc(dayLabel(stats.last_backup_import.slice(0, 10)))}`
+            : 'Add all your past bank SMS at once'}</div></span>
+        </button>`}
       <button class="settings-row" id="export">
         <span>💾</span><span class="sr-main">Back up<div class="sr-sub">Save all your payments to a file</div></span>
       </button>
@@ -907,23 +1044,44 @@ export async function openSettings() {
 
     <div class="section-title">Your data</div>
     <div class="card pad small muted">
-      <div>Stored only on this phone, in this app. Nothing is uploaded anywhere.</div>
-      <div style="margin-top:6px">${esc(persistence)}</div>
-      <div style="margin-top:6px">Clearing Chrome's site data for this app would erase it, so take a backup now and then.</div>
+      ${isNative ? `
+        <div>Stored only on this phone, in Kharcha's private storage. The app has no internet
+        access, so nothing can be uploaded anywhere.</div>
+        <div style="margin-top:6px">Uninstalling Kharcha erases it, so take a backup now and then.</div>` : `
+        <div>Stored only on this phone, in this app. Nothing is uploaded anywhere.</div>
+        <div style="margin-top:6px">${esc(persistence)}</div>
+        <div style="margin-top:6px">Clearing Chrome's site data for this app would erase it, so take a backup now and then.</div>`}
     </div>
   `, {
     onMount(box, close) {
-      box.querySelector('#import-backup').addEventListener('click', () => {
-        close();
-        setTimeout(openImportBackup, 180);
-      });
+      const importRow = box.querySelector('#import-backup');
+      if (importRow) {
+        importRow.addEventListener('click', () => {
+          close();
+          setTimeout(openImportBackup, 180);
+        });
+      }
+      const rescanRow = box.querySelector('#rescan-sms');
+      if (rescanRow) {
+        rescanRow.addEventListener('click', async () => {
+          close();
+          const report = await syncFromDevice({ full: true });
+          if (report && !report.added.length) toast(`Checked ${report.read} bank SMS. Everything was already here.`);
+        });
+      }
 
       box.querySelector('#export').addEventListener('click', async () => {
         const json = await api.exportData();
+        const today = new Date().toISOString().slice(0, 10);
+        if (isNative) {
+          // Downloads don't exist inside the app; Android's "Save to…" does.
+          const saved = await saveTextFile(`kharcha-backup-${today}.json`, json);
+          toast(saved ? 'Backup saved.' : 'Backup not saved.', saved ? 'good' : '');
+          return;
+        }
         const blob = new Blob([json], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
-        const today = new Date().toISOString().slice(0, 10);
         link.href = url;
         link.download = `kharcha-backup-${today}.json`;
         document.body.appendChild(link);

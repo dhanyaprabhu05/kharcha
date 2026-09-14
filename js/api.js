@@ -7,6 +7,7 @@ import { resolveMerchant } from './merchants.js';
 import { CATEGORIES, categoryInfo, categorise, isCategory, isGuess, UNCATEGORISED } from './categories.js';
 import { formatInr, parsePaise } from './money.js';
 import { readSmsBackup } from './smsbackup.js';
+import { hasSmsPermission, isNative, readBankSms } from './native.js';
 
 /* ----------------------------------------------------------- dates */
 
@@ -372,7 +373,17 @@ async function linkRefund(refund) {
 
     Shared by pasting, sharing and backup import, so all three apply exactly
     the same rules: credentials refused, duplicates skipped, refunds matched. */
-async function importMessages(messages, { recordUnreadable = true } = {}) {
+//: Imports run one at a time. Two at once (say, reading the inbox just as a
+//: shared SMS arrives) would both see a message as new and both try to save it.
+let importQueue = Promise.resolve();
+
+function importMessages(messages, options) {
+  const run = importQueue.then(() => importNow(messages, options));
+  importQueue = run.catch(() => {});
+  return run;
+}
+
+async function importNow(messages, { recordUnreadable = true } = {}) {
   const report = { added: [], duplicates: 0, credentials: 0, unreadable: [], refundsLinked: 0 };
   const known = new Set(store.allTransactions().map((t) => t.fingerprint));
   const records = [];
@@ -446,6 +457,30 @@ async function reparseSaved() {
 
 /** Save every readable payment in pasted or shared text. */
 const importText = (text) => importMessages(splitMessages(text).map((body) => ({ body })));
+
+/** Android app only: read bank SMS straight from the phone's inbox.
+
+    Each check re-reads the last few days as well as anything newer, and
+    duplicates are skipped, so a message that arrived while the app was closed,
+    or was missed for any reason, is always picked up next time. The very first
+    read, or `full`, goes through the whole inbox. */
+const DEVICE_OVERLAP_MS = 3 * 86400000;
+
+async function importFromDevice({ full = false } = {}) {
+  if (!isNative || !hasSmsPermission()) {
+    return { added: [], duplicates: 0, credentials: 0, unreadable: [], refundsLinked: 0, read: 0 };
+  }
+  const cursor = full ? 0 : Number(store.meta('device_sms_cursor') || 0);
+  const messages = readBankSms(cursor ? cursor - DEVICE_OVERLAP_MS : 0);
+  const report = await importMessages(messages, { recordUnreadable: false });
+
+  const newest = messages.reduce((max, m) => Math.max(max, m.receivedAt.getTime() || 0), cursor);
+  await store.setMeta('device_sms_cursor', newest);
+  await store.setMeta('device_sms_checked', new Date().toISOString());
+
+  const days = report.added.map((t) => t.day).sort();
+  return { ...report, read: messages.length, from: days[0] || null, to: days[days.length - 1] || null };
+}
 
 /** Import a whole "SMS Backup & Restore" file.
 
@@ -665,6 +700,8 @@ export const api = {
   },
   async clearAll() { await store.clearAll(); return { ok: true }; },
   async markBackupImported() { await store.setMeta('last_backup_import', new Date().toISOString()); },
+  importFromDevice,
+  deviceLastChecked: () => store.meta('device_sms_checked'),
   async addDemo(rows) { return store.addTransactions(rows); },
 
   buildDemoRecord(body, source = 'demo') {

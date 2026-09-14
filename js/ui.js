@@ -56,6 +56,15 @@ export function dayLabel(iso) {
   return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 }
 
+/** " since yesterday", " since 3 Aug" — for the end of a sentence. Empty for
+    today, where "4 payments since Today" would read oddly. */
+export function sinceLabel(iso) {
+  if (!iso) return '';
+  const label = dayLabel(iso);
+  if (label === 'Today') return '';
+  return ` since ${label === 'Yesterday' ? 'yesterday' : label}`;
+}
+
 export function timeLabel(iso, hasTime = true) {
   if (!iso || !hasTime) return '';
   const date = new Date(iso);
@@ -92,6 +101,17 @@ export function toast(message, kind = '', { action = null, duration } = {}) {
 
 /* ---------- bottom sheet ---------- */
 
+//: Open sheets, newest last, so Android's back button can close the top one.
+const openSheets = [];
+
+/** Close the top sheet. Returns true if there was one (for the back button). */
+export function closeTopSheet() {
+  const close = openSheets[openSheets.length - 1];
+  if (!close) return false;
+  close();
+  return true;
+}
+
 export function sheet(innerHtml, { onMount } = {}) {
   const root = document.getElementById('sheet-root');
   const backdrop = h(`
@@ -100,6 +120,8 @@ export function sheet(innerHtml, { onMount } = {}) {
     </div>`);
 
   const close = () => {
+    const index = openSheets.indexOf(close);
+    if (index >= 0) openSheets.splice(index, 1);
     backdrop.style.transition = 'opacity .15s';
     backdrop.style.opacity = '0';
     setTimeout(() => backdrop.remove(), 150);
@@ -112,6 +134,7 @@ export function sheet(innerHtml, { onMount } = {}) {
   });
   document.addEventListener('keydown', onKey);
   root.appendChild(backdrop);
+  openSheets.push(close);
 
   if (onMount) onMount(backdrop.querySelector('.sheet'), close);
   return close;

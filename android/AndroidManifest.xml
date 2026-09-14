@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Kharcha for Android.
+
+  Permissions, deliberately minimal:
+    READ_SMS  - to read bank alerts from the inbox. The only permission asked for.
+
+  Deliberately NOT requested:
+    INTERNET  - the app has no network access at all, so nothing it reads can
+                ever leave the phone. The web code is bundled inside the app.
+
+  allowBackup is off so Android's automatic cloud backup never copies your
+  payment history off the phone. Use Kharcha's own Back up / Restore instead.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="io.github.dhanyaprabhu05.kharcha">
+
+    <uses-permission android:name="android.permission.READ_SMS" />
+
+    <application
+        android:label="Kharcha"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="false"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|smallestScreenSize"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

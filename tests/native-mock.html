@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#0d1117" />
+<title>Kharcha (Android bridge mock)</title>
+<link rel="stylesheet" href="../app.css" />
+</head>
+<body>
+<!--
+  Development only. Runs the real app with a fake window.KharchaNative so the
+  Android-only paths (SMS permission, reading the inbox, saving a backup, the
+  back button) can be exercised in a desktop browser. Never bundled into the
+  APK: the Android build copies only the app itself.
+-->
+<script>
+  const pad = (n) => String(n).padStart(2, '0');
+  function unionSms(daysAgo, amount, payee, hh = 13) {
+    const d = new Date(); d.setDate(d.getDate() - daysAgo); d.setHours(hh, 5, 9, 0);
+    const stamp = `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()} ${pad(hh)}:05:09`;
+    return {
+      address: 'VK-UNIONB',
+      date: d.getTime(),
+      body: `Union Bank of India A/c *7165 Debited Rs:${amount} on ${stamp} by Mob Bk ref no , Fvg: ${payee} Avl Bal Rs:28893.90. Not you?Call 18002333/SMS BLOCK 7165 to 8879365472`,
+    };
+  }
+  window.__mockInbox = [
+    unionSms(9, '264.88', 'ZOMATO L'), unionSms(8, '20.00', 'JUSTVEND'),
+    unionSms(6, '64.00', 'ROPPEN T'), unionSms(4, '412.00', 'SWIGGY I'),
+    unionSms(2, '189.00', 'UBER IND'), unionSms(1, '500.00', 'RAHUL KU'),
+    { address: '+919876543210', date: Date.now() - 3600e3, body: 'paid Rs 200 for lunch da' },
+    { address: 'VK-UNIONB', date: Date.now() - 7200e3, body: 'Your OTP for transaction of Rs:250.00 is 483920. Never Share OTP/PIN/CVV-Union Bank of India' },
+  ];
+  // Same filtering as MainActivity.readBankSms: bank sender IDs only.
+  const isBankSender = (a) => /[A-Z]/i.test(a) && /UNIONB|ICICI|HDFC|SBI|AXIS/.test(a.toUpperCase());
+  window.KharchaNative = {
+    granted: false,
+    calls: [],
+    hasSmsPermission() { return this.granted; },
+    requestSmsPermission() {
+      this.calls.push('requestSmsPermission');
+      setTimeout(() => {
+        this.granted = true;
+        window.dispatchEvent(new CustomEvent('kharcha-permission', { detail: { granted: true } }));
+      }, 30);
+    },
+    readBankSms(since) {
+      this.calls.push('readBankSms:' + since);
+      return JSON.stringify(window.__mockInbox.filter((m) => m.date > since && isBankSender(m.address)));
+    },
+    saveTextFile(name, text) {
+      this.saved = { name, bytes: text.length };
+      setTimeout(() => window.dispatchEvent(new CustomEvent('kharcha-saved', { detail: { ok: true } })), 30);
+    },
+    setBars(hex, dark) { this.bars = [hex, dark]; },
+    appVersion() { return 'mock'; },
+  };
+</script>
+<script type="module">
+  // Reuse the real app markup, then start the real app.
+  const html = await (await fetch('../index.html')).text();
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  document.body.insertAdjacentHTML('afterbegin', doc.querySelector('#app').outerHTML);
+  await import('../js/app.js');
+</script>
+</body>
+</html>
