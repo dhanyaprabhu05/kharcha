@@ -75,12 +75,22 @@ function resolveDay(parsedDay) {
   return { day: parsedDay, hasTime: parsedDay === isoDay(today) };
 }
 
+//: Display names for payments whose SMS doesn't name the other side.
+export const UNNAMED_DEBIT = 'Untagged payment';
+export const UNNAMED_CREDIT = 'Money received';
+const PLACEHOLDER_NAMES = new Set([UNNAMED_DEBIT, UNNAMED_CREDIT, 'Unknown', 'ATM withdrawal', 'Person (UPI)']);
+
 /** `receivedAt` is when the phone received the SMS, known exactly for
     messages read from a backup file. When present it is the best date there
     is, and it also gives the time of day, which a pasted SMS lacks. */
 function buildRecord(parsed, source = 'sms', receivedAt = null) {
   let merchant = resolveMerchant(parsed.counterparty);
   if (parsed.instrument === 'atm') merchant = { key: 'atm', name: 'ATM withdrawal', isPerson: false };
+  if (!merchant.key && !parsed.counterparty) {
+    // Some banks (Union Bank) never say who was paid. Say so plainly rather
+    // than showing "Unknown", and invite a tag.
+    merchant = { key: '', name: parsed.direction === 'credit' ? UNNAMED_CREDIT : UNNAMED_DEBIT, isPerson: false };
+  }
 
   const decision = categorise({
     merchantKey: merchant.key,
@@ -101,7 +111,13 @@ function buildRecord(parsed, source = 'sms', receivedAt = null) {
     hasTime = true;
   } else {
     ({ day, hasTime } = resolveDay(parsed.day));
-    occurredAt = hasTime ? now.toISOString() : `${day}T12:00:00`;
+    if (parsed.time && parsed.day === day) {
+      // The SMS states its own time (Union Bank does), so use it.
+      occurredAt = `${day}T${parsed.time}`;
+      hasTime = true;
+    } else {
+      occurredAt = hasTime ? now.toISOString() : `${day}T12:00:00`;
+    }
   }
   return {
     fingerprint: fingerprintOf(parsed.body),
@@ -513,6 +529,54 @@ export const api = {
     }
     await store.updateTransactions([{ ...txn, category, category_source: 'user' }]);
     return { ok: true, updated: 1, category };
+  },
+
+  /** Payments still waiting for a category: guessed, or never named. */
+  async untagged() {
+    return {
+      transactions: store.allTransactions()
+        .filter((t) => t.direction === 'debit' && !t.excluded && isGuess(t.category_source))
+        .sort(newestFirst).map(present),
+    };
+  },
+
+  /** Names you've tagged payments with, most used first, for one-tap reuse. */
+  async recentLabels(limit = 8) {
+    const counts = new Map();
+    store.allTransactions()
+      .filter((t) => t.category_source === 'user' && t.direction === 'debit' && t.source !== 'demo')
+      .filter((t) => t.merchant_key && !PLACEHOLDER_NAMES.has(t.merchant_name))
+      .forEach((t) => {
+        const entry = counts.get(t.merchant_key) || { key: t.merchant_key, name: t.merchant_name, category: t.category, count: 0 };
+        entry.count += 1;
+        entry.category = t.category;   // the most recent choice wins
+        counts.set(t.merchant_key, entry);
+      });
+    return [...counts.values()].sort((a, b) => b.count - a.count).slice(0, limit)
+      .map((e) => ({ ...e, emoji: categoryInfo(e.category).emoji }));
+  },
+
+  /** Tag one payment with a category and, optionally, what it was.
+
+      A typed name ("Canteen") replaces the placeholder and is remembered, so
+      it appears as a one-tap choice next time. With no name, a payment from
+      a known shop teaches that shop, just like correcting it anywhere else. */
+  async labelTransaction(id, { name = '', category }) {
+    if (!isCategory(category)) throw new Error('Unknown category.');
+    const txn = store.getTransaction(id);
+    if (!txn) throw new Error('That payment no longer exists.');
+
+    const typed = name.trim();
+    if (typed) {
+      const merchant = resolveMerchant(typed);
+      await store.setRule(merchant.key, category);
+      await store.updateTransactions([{
+        ...txn, merchant_key: merchant.key, merchant_name: merchant.name,
+        category, category_source: 'user',
+      }]);
+      return { ok: true, updated: 1 };
+    }
+    return api.setCategory(id, category, true);
   },
 
   async setExcluded(id, excluded) {

@@ -12,14 +12,37 @@ export const CREDIT = 'credit';
 
 /* ------------------------------------------------------------------ gates */
 
-//: Anything here means credentials. Such a message is rejected before parsing,
-//: so an OTP can never reach storage.
+//: Credential words. A message that still contains one AFTER safety footers
+//: are removed is rejected before parsing, so an OTP can never reach storage.
 const OTP_PATTERNS = [
-  /\botp\b/i, /one[\s-]?time\s+password/i, /\bdo\s+not\s+share\b/i,
-  /\bnever\s+share\b/i, /\bdon'?t\s+share\b/i, /\bverification\s+code\b/i,
+  /\botp\b/i, /one[\s-]?time\s+password/i, /\bverification\s+code\b/i,
   /\bsecurity\s+code\b/i, /\blogin\s+code\b/i, /\bpassword\s+is\b/i,
   /\bpin\s+is\b/i, /\bmpin\b/i, /\bcvv\b/i,
 ];
+
+//: A code sitting right next to a credential word: "483920 is your OTP",
+//: "code: 9921", "MPIN 4321". Checked on the full, unstripped text as a
+//: second net, so an OTP message can't hide behind a footer.
+const CODE_PATTERNS = [
+  /\b\d{4,8}\s+is\s+(?:your|the)\b/i,
+  /\b(?:otp|code|pin|mpin|password)\b\s*(?:is|:|-|=)?\s*\d{4,8}\b/i,
+];
+
+//: Safety footers that banks append to ordinary payment alerts:
+//:   Union Bank: "Never Share OTP/PIN/CVV-Union Bank of India"
+//:   others:     "Do not share your OTP with anyone", "Bank never asks for PIN"
+//: They name credentials without containing one. Rejecting on them would throw
+//: away every payment from those banks, which the first version of this app did.
+const CREDENTIAL_WORD = String.raw`(?:otp|pin|mpin|cvv|password|card\s+details|credentials)`;
+const CREDENTIAL_LIST = String.raw`(?:(?:your|the|this|any)\s+)?${CREDENTIAL_WORD}(?:\s*[\/,&]\s*(?:or\s+)?${CREDENTIAL_WORD}|\s+(?:or|and)\s+${CREDENTIAL_WORD})*`;
+const DISCLAIMER_PATTERNS = [
+  new RegExp(String.raw`\b(?:never|do\s*not|don'?t|pls\s+do\s+not|please\s+do\s+not|not\s+to)\s+(?:share|disclose|reveal|tell)\s+${CREDENTIAL_LIST}(?:\s+with\s+(?:anyone|anybody|any\s*one))?`, 'gi'),
+  new RegExp(String.raw`\b(?:bank\s+)?(?:will\s+never|never|does\s+not|doesn'?t|won'?t)\s+(?:ask|asks|call|calls|request|requests)\s+(?:you\s+)?(?:for\s+)?${CREDENTIAL_LIST}`, 'gi'),
+];
+
+function withoutDisclaimers(text) {
+  return DISCLAIMER_PATTERNS.reduce((acc, pattern) => acc.replace(pattern, ' '), text);
+}
 
 const TRANSACTION_MARKERS = /\b(debited|credited|spent|sent|paid|received|withdrawn|purchase|transferred|trf|deducted|debit|credit|thank you for using)\b/i;
 
@@ -37,7 +60,10 @@ const NOISE_MARKERS = [
 ];
 
 export function containsCredential(body) {
-  return OTP_PATTERNS.some((pattern) => pattern.test(body || ''));
+  const text = body || '';
+  if (CODE_PATTERNS.some((pattern) => pattern.test(text))) return true;
+  const stripped = withoutDisclaimers(text);
+  return OTP_PATTERNS.some((pattern) => pattern.test(stripped));
 }
 
 export function looksLikeTransaction(body) {
@@ -69,9 +95,10 @@ export function identifyBank(body, sender = '') {
 
 /* ----------------------------------------------------------------- amount */
 
+//: "Rs.240", "Rs 240", "Rs:30.00" (Union Bank), "INR 1,234", "₹240".
 //: The trailing-currency form must not fire on a masked card number: in
 //: "Card no. XX2211 INR 3200", "2211 INR" is the card, not the amount.
-const AMOUNT_RE = /(?:(?:rs|inr)\.?\s*|₹\s*)([\d,]+(?:\.\d{1,2})?)|(?<![xX*\d])([\d,]+(?:\.\d{1,2})?)\s*(?:rs\b|inr\b|₹)/gi;
+const AMOUNT_RE = /(?:(?:rs|inr)\s*[.:]?\s*|₹\s*)([\d,]+(?:\.\d{1,2})?)|(?<![xX*\d])([\d,]+(?:\.\d{1,2})?)\s*(?:rs\b|inr\b|₹)/gi;
 
 //: Some banks omit the currency: "debited by 150.0".
 const BARE_AMOUNT_RE = /\b(?:debited|credited|spent|sent|paid|withdrawn|deducted)\s+(?:by|for|with|of)?\s*([\d,]+(?:\.\d{1,2})?)\b/i;
@@ -145,6 +172,7 @@ export function extractInstrument(body) {
   if (/\bupi\b|\bvpa\b|@/.test(lowered)) return 'upi';
   if (/\bcard\b/.test(lowered)) return 'card';
   if (/\b(neft|imps|rtgs)\b/.test(lowered)) return 'bank_transfer';
+  if (/\bmob(?:ile)?\s*b(?:an)?k\b|\bmobile\s+banking\b/.test(lowered)) return 'mobile_banking';
   return 'unknown';
 }
 
@@ -184,11 +212,18 @@ const CARD_AFTER_TIME_RE = /(?:\d{1,2}:\d{2}(?::\d{2})?|\d{2}[-\/]\d{2}[-\/]\d{2
 const OWN_ACCOUNT_RE = /\b(a\/c|acct|account|your|bank\s+a\/c)\b|x{2,}\d|\bupi\s*user\b/i;
 
 //: Payment-rail labels that turn up where a payee would be ("by UPI ref ...").
-const RAIL_LABELS = new Set(['upi', 'neft', 'imps', 'rtgs', 'atm', 'nach', 'ecs']);
+//: Also the channel names some banks put there: Union Bank writes "by Mob Bk",
+//: which is mobile banking, not who was paid.
+const RAIL_LABELS = new Set(['upi', 'neft', 'imps', 'rtgs', 'atm', 'nach', 'ecs', 'pos',
+  'mob bk', 'mob bnk', 'mobile banking', 'mobile bank', 'mbk', 'net banking', 'netbanking',
+  'internet banking', 'inet', 'ib', 'branch', 'cash']);
 
 function cleanCounterparty(text) {
   if (!text) return null;
-  const cleaned = text.replace(/\s+/g, ' ').replace(/^[\s.,\-;:\/]+|[\s.,\-;:\/]+$/g, '');
+  const cleaned = text.replace(/\s+/g, ' ').replace(/^[\s.,\-;:\/]+|[\s.,\-;:\/]+$/g, '')
+    // A leading preposition belongs to the sentence, not the name: the card
+    // pattern reads "12:16:54 by Mob Bk" as the text after the time.
+    .replace(/^(?:by|via|through|thru|from|to|at|towards)\s+/i, '');
   if (!cleaned || cleaned.length < 2) return null;
   if (/^[\d\W_]+$/.test(cleaned)) return null;     // bare reference numbers
   if (OWN_ACCOUNT_RE.test(cleaned)) return null;
@@ -262,6 +297,14 @@ const DATE_PATTERNS = [
   [/\b(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})\b/, 'ymd'],
 ];
 
+/** The time written in the SMS, as "HH:MM:SS", or null.
+    Union Bank includes one ("07-09-2026 12:16:54"); most banks don't. */
+export function extractTime(body) {
+  const match = body.match(/\b([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?\b/);
+  if (!match) return null;
+  return `${match[1].padStart(2, '0')}:${match[2]}:${match[3] || '00'}`;
+}
+
 /** The transaction date written in the SMS, as "YYYY-MM-DD", or null. */
 export function extractDate(body) {
   for (const [pattern, order] of DATE_PATTERNS) {
@@ -309,6 +352,7 @@ export function parseSms(body, sender = '') {
     reference: extractReference(text),
     bank: identifyBank(text, sender),
     day: extractDate(text),
+    time: extractTime(text),
     refund: direction === CREDIT && isRefund(text),
   };
 }

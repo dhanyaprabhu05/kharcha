@@ -3,8 +3,8 @@
 **See where your money goes, from your bank's SMS.** Kharcha runs entirely inside
 your phone's browser, with no server, no account, and no APK to download.
 
-Copy an ICICI payment SMS and tap **Paste SMS**, or share the SMS straight to
-Kharcha. It reads the amount and the shop, files the payment into a category,
+Copy a payment SMS from your bank and tap **Paste SMS**, or import a whole SMS
+backup at once. It reads the amount and the shop, files the payment into a category,
 and shows what you spent today, this week and this month.
 
 ---
@@ -45,8 +45,21 @@ previewed before it's saved.
 **Cash:** **+** → **Cash**.
 
 Older SMS are fine to add. Kharcha uses the date written in the message, and it
-never saves the same SMS twice: every ICICI alert carries its own UPI reference
-number, so sharing one twice cannot double-count it.
+never saves the same SMS twice: bank alerts carry their own reference number,
+so adding one twice cannot double-count it.
+
+## Banks that don't name the payee (Union Bank)
+
+Union Bank of India's alerts say how much and when, but never who you paid:
+`A/c *7165 Debited for Rs:250.00 on 08-09-2026 13:05:10 by Mob Bk ...`. Kharcha
+still gets the amount, date and time exactly right. For *what it was on*, tap
+**Sort** on the Today screen: one payment at a time, one tap for a category, and
+an optional name. Every name you type ("Canteen", "Auto") becomes a one-tap
+button, so regular spots take a single tap from the second time on.
+
+Every Union Bank alert ends with "Never Share OTP/PIN/CVV". That's a safety
+footer, not an OTP. Kharcha tells the two apart: footers are ignored, while a
+message actually carrying a code ("Your OTP … is 483920") is still refused.
 
 ## Teaching it
 
@@ -103,7 +116,7 @@ python serve.py
 ```
 
 Then open http://localhost:8790. Run **test.html** to check the parser against
-real ICICI, HDFC, SBI and Axis message formats in `tests/fixtures.js`. When a
+real Union Bank, ICICI, HDFC, SBI and Axis message formats in `tests/fixtures.js`. When a
 bank changes its wording, add the new message there first and fix the parser
 until it passes.
 

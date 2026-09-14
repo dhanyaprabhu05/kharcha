@@ -21,7 +21,7 @@ const ATTRIBUTE_RE = /([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 //: ("AD-ICICIB", "JD-ICICIT", "VM-HDFCBK").
 const BANK_SENDER_CODES = [
   'ICICI', 'HDFC', 'SBI', 'AXIS', 'KOTAK', 'PNB', 'BOB', 'BOI', 'CANBNK', 'CANARA',
-  'UNIONB', 'IDBI', 'IDFC', 'INDUS', 'YESBNK', 'RBL', 'FEDBNK', 'FEDERAL', 'SIB',
+  'UNIONB', 'UBOI', 'UBIN', 'ANDBNK', 'CORPBK', 'IDBI', 'IDFC', 'INDUS', 'YESBNK', 'RBL', 'FEDBNK', 'FEDERAL', 'SIB',
   'CSB', 'KVB', 'TMB', 'INDBNK', 'IOB', 'UCO', 'CENTBK', 'AUBANK', 'BANDHN',
   'JUPITER', 'FISUPI', 'PAYTM', 'PHONPE', 'PHONEPE', 'GPAY', 'AMZNPAY', 'SLICE', 'CRED',
 ];

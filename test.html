@@ -61,6 +61,7 @@ for (const fx of FIXTURES) {
     if (e.merchantName && merchant.name !== e.merchantName) problems.push(`name '${merchant.name}' ≠ '${e.merchantName}'`);
     if (e.category && decision.category !== e.category) problems.push(`category ${decision.category} ≠ ${e.category} (merchant ${merchant.key})`);
     if (e.day && parsed.day !== e.day) problems.push(`day ${parsed.day} ≠ ${e.day}`);
+    if (e.time && parsed.time !== e.time) problems.push(`time ${parsed.time} ≠ ${e.time}`);
     return problems;
   });
 }
@@ -122,18 +123,24 @@ check('categories: a user correction beats everything', () => {
 });
 
 /* ---- splitting a paste ---- */
+// Looked up by name, not position: reordering the fixture list must not
+// silently change what these tests exercise.
+const byName = (n) => FIXTURES.find((f) => f.name === n).body;
+const ICICI_A = byName('ICICI UPI debit, current format');
+const ICICI_B = byName('ICICI UPI debit to a legal-entity name (Swiggy)');
+const UNION_A = byName('Union Bank debit, same format');
+const UNION_B = byName('Union Bank credit (real message, digits changed)');
+
 check('paste: two SMS separated by a blank line', () => {
-  const text = `${FIXTURES[0].body}\n\n${FIXTURES[1].body}`;
-  const parts = splitMessages(text);
+  const parts = splitMessages(`${ICICI_A}\n\n${UNION_A}`);
   return parts.length === 2 ? [] : [`got ${parts.length}`];
 });
-check('paste: two SMS on consecutive lines', () => {
-  const text = `${FIXTURES[0].body}\n${FIXTURES[1].body}`;
-  const parts = splitMessages(text);
+check('paste: two Union Bank SMS on consecutive lines', () => {
+  const parts = splitMessages(`${UNION_A}\n${UNION_B}`);
   return parts.length === 2 ? [] : [`got ${parts.length}`];
 });
 check('paste: one SMS that wrapped over two lines stays one', () => {
-  const body = FIXTURES[0].body;
+  const body = ICICI_B;
   const cut = body.indexOf('; ');
   const parts = splitMessages(body.slice(0, cut) + '\n' + body.slice(cut));
   return parts.length === 1 ? [] : [`got ${parts.length}`];

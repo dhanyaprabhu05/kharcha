@@ -7,6 +7,39 @@
    failed payment, collect request) and never become a transaction. */
 
 export const FIXTURES = [
+  // ------------------------------------------------------- Union Bank of India
+  // The format actually received on the phone this app is used with. Every
+  // message ends in a safety footer naming OTP/PIN/CVV, and none name a payee.
+  {
+    name: 'Union Bank credit (real message, digits changed)',
+    body: 'A/c *7165 Credited for Rs:30.00 on 07-09-2026 12:16:54 by Mob Bk ref no 525512340001 Avl Bal Rs:1520.45 .Never Share OTP/PIN/CVV-Union Bank of India',
+    expect: { amount: 3000, direction: 'credit', account: '7165', category: 'income', day: '2026-09-07', time: '12:16:54', merchantName: 'Unknown' },
+  },
+  {
+    name: 'Union Bank debit, same format',
+    body: 'A/c *7165 Debited for Rs:250.00 on 08-09-2026 13:05:10 by Mob Bk ref no 525512340002 Avl Bal Rs:1270.45 .Never Share OTP/PIN/CVV-Union Bank of India',
+    expect: { amount: 25000, direction: 'debit', account: '7165', category: 'other', day: '2026-09-08', time: '13:05:10', merchantName: 'Unknown' },
+  },
+  {
+    name: 'Union Bank debit with a four-digit amount',
+    body: 'A/c *7165 Debited for Rs:1,499.00 on 09-09-2026 20:41:02 by Mob Bk ref no 525512340003 Avl Bal Rs:12.50 .Never Share OTP/PIN/CVV-Union Bank of India',
+    expect: { amount: 149900, direction: 'debit', account: '7165', day: '2026-09-09' },
+  },
+  {
+    name: 'Union Bank UPI variant',
+    body: 'Your A/c XX7165 is debited for Rs.120.00 on 10-09-2026 by UPI ref no 525512340004. Avl bal Rs.1150.45 - Union Bank of India',
+    expect: { amount: 12000, direction: 'debit', account: '7165', day: '2026-09-10' },
+  },
+  {
+    name: 'Payment alert with "never asks / do not share" footers is still a payment',
+    body: 'Rs.500.00 debited from a/c XX4567 on 09-09-26 to VPA swiggy@icici (UPI Ref 525512340005). Bank never asks for OTP/PIN. Do not share your OTP with anyone.',
+    expect: { amount: 50000, direction: 'debit', merchant: 'swiggy' },
+  },
+  // A real OTP must still be refused even when it carries the same footer.
+  { name: 'Union Bank OTP with the footer', body: 'Your OTP for transaction of Rs:250.00 is 483920. Never Share OTP/PIN/CVV-Union Bank of India', expect: null },
+  { name: 'OTP hidden behind a footer, labelled "code"', body: '482913 is your code to pay Rs:99.00 to ZOMATO. Never share OTP/PIN/CVV.', expect: null },
+  { name: 'MPIN message', body: 'Use MPIN 4321 to approve the debit of Rs:500.00 from A/c *7165.', expect: null },
+
   // ------------------------------------------------------------------ ICICI
   {
     name: 'ICICI UPI debit, current format',

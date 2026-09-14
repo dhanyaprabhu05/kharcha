@@ -57,11 +57,11 @@ export async function renderToday(root) {
 
       ${s.uncategorised_count > 0 ? `
         <div style="margin-top:12px">
-          <div class="notice">
+          <div class="notice" style="align-items:center">
             <span class="ico">🏷️</span>
-            <div><strong>${s.uncategorised_count} payment${s.uncategorised_count === 1 ? '' : 's'}</strong>
-            this month ${s.uncategorised_count === 1 ? 'was' : 'were'} guessed or left uncategorised.
-            Tap one to fix it — Kharcha remembers the shop next time.</div>
+            <div style="flex:1"><strong>${s.uncategorised_count} payment${s.uncategorised_count === 1 ? '' : 's'}</strong>
+            this month need${s.uncategorised_count === 1 ? 's' : ''} a category.</div>
+            <button class="btn btn-primary btn-sm" id="sort-now">Sort</button>
           </div>
         </div>` : ''}
 
@@ -78,6 +78,8 @@ export async function renderToday(root) {
     wireTransactions(root);
     const catchUp = root.querySelector('#catch-up');
     if (catchUp) catchUp.addEventListener('click', openImportBackup);
+    const sortNow = root.querySelector('#sort-now');
+    if (sortNow) sortNow.addEventListener('click', openSorter);
   } catch (err) {
     showError(root, err, () => renderToday(root));
   }
@@ -91,7 +93,7 @@ function onboarding() {
         See where your money goes
       </div>
       <ol class="steps">
-        <li>When you pay, ICICI texts you. <strong>Long-press that SMS → Copy.</strong></li>
+        <li>When you pay, your bank texts you. <strong>Long-press that SMS → Copy.</strong></li>
         <li>Open Kharcha and tap <strong>Paste SMS</strong>.</li>
         <li>It reads the amount and the shop, and files it for you.</li>
       </ol>
@@ -657,6 +659,126 @@ export function openAddSheet({ tab = 'sms', text = '' } = {}) {
   });
 }
 
+/* ============================================================ Sort payments */
+
+/** Tag untagged payments one at a time: tap a category and it moves on.
+
+    Built for banks like Union Bank whose SMS never say who was paid. Names you
+    type become one-tap buttons, so a regular spot ("Canteen", "Auto") costs a
+    single tap from the second time on. */
+export async function openSorter() {
+  let queue = (await api.untagged()).transactions;
+  const total = queue.length;
+  let done = 0;
+
+  if (!total) {
+    toast('Nothing to sort — every payment has a category.', 'good');
+    return;
+  }
+
+  sheet(`<div id="sorter"></div>`, {
+    onMount(box, close) {
+      const root = box.querySelector('#sorter');
+
+      const render = async () => {
+        if (!queue.length) {
+          root.innerHTML = `
+            <div class="empty" style="padding:24px 10px">
+              <div class="e-ico">🎉</div>
+              <h3>All sorted</h3>
+              <p>${done} payment${done === 1 ? '' : 's'} tagged. Your Month tab now shows where it all went.</p>
+              <button class="btn btn-primary" id="sorter-done">Done</button>
+            </div>`;
+          root.querySelector('#sorter-done').addEventListener('click', () => { close(); refreshCurrent(); });
+          return;
+        }
+
+        const t = queue[0];
+        const labels = await api.recentLabels(8);
+        const knownShop = t.merchant_key && !t.merchant_name.startsWith('Untagged');
+        root.innerHTML = `
+          <div style="display:flex;justify-content:space-between;align-items:baseline">
+            <div class="small faint">${done + 1} of ${total}</div>
+            <button class="btn btn-ghost btn-sm" id="sorter-close">Finish later</button>
+          </div>
+          <div style="text-align:center;margin:10px 0 14px">
+            <div style="font-size:34px;font-weight:720;letter-spacing:-.03em" class="tabular">${esc(t.amount_display)}</div>
+            <div class="muted small">
+              ${esc(dayLabel(t.day))} ${esc(timeLabel(t.occurred_at, t.has_time))}
+              ${t.bank ? ` · ${esc(t.bank)}` : ''}${t.account_tail ? ` ••${esc(t.account_tail)}` : ''}
+            </div>
+            ${knownShop ? `<div style="margin-top:6px;font-weight:640">${esc(t.merchant_name)}</div>` : ''}
+          </div>
+
+          ${labels.length ? `
+            <div class="section-title" style="margin:0 0 8px">One tap</div>
+            <div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px">
+              ${labels.map((l) => `
+                <button class="tag" data-label-key="${esc(l.key)}" style="padding:7px 11px;font-size:13px;border:1px solid var(--border);cursor:pointer">
+                  ${l.emoji} ${esc(l.name)}</button>`).join('')}
+            </div>` : ''}
+
+          ${knownShop ? '' : `
+            <label class="field" style="margin-bottom:10px">
+              <span>What was it? <span class="faint">(optional — e.g. Canteen, Auto, Rent)</span></span>
+              <input class="input" id="sorter-name" type="text" autocomplete="off" />
+            </label>`}
+
+          <div class="cat-picker" id="sorter-cats">
+            ${CATEGORIES.filter((c) => c.id !== 'income' && c.id !== 'other').map((c) => `
+              <button class="cat-pick" data-cat="${esc(c.id)}"><span class="e">${c.emoji}</span><span>${esc(c.label)}</span></button>`).join('')}
+          </div>
+
+          <div style="display:flex;gap:8px;margin-top:14px">
+            <button class="btn btn-ghost btn-sm" id="sorter-skip" style="flex:1">Skip</button>
+            <button class="btn btn-ghost btn-sm" id="sorter-exclude" style="flex:1">Don't count it</button>
+          </div>`;
+
+        const next = () => { queue = queue.slice(1); done += 1; render(); };
+
+        root.querySelector('#sorter-close').addEventListener('click', () => { close(); refreshCurrent(); });
+
+        root.querySelectorAll('[data-label-key]').forEach((chip) => {
+          chip.addEventListener('click', async () => {
+            const label = labels.find((l) => l.key === chip.dataset.labelKey);
+            await api.labelTransaction(t.id, { name: label.name, category: label.category });
+            next();
+          });
+        });
+
+        root.querySelector('#sorter-cats').addEventListener('click', async (event) => {
+          const button = event.target.closest('[data-cat]');
+          if (!button) return;
+          const nameInput = root.querySelector('#sorter-name');
+          const result = await api.labelTransaction(t.id, {
+            name: nameInput ? nameInput.value : '',
+            category: button.dataset.cat,
+          });
+          // Teaching a known shop can file several queued payments at once.
+          if (result.updated > 1) {
+            const fresh = new Set((await api.untagged()).transactions.map((x) => x.id));
+            const before = queue.length;
+            queue = queue.filter((x) => x.id === t.id || fresh.has(x.id));
+            done += before - queue.length;
+          }
+          next();
+        });
+
+        root.querySelector('#sorter-skip').addEventListener('click', () => {
+          queue = queue.slice(1).concat(t);   // back of the line, not lost
+          render();
+        });
+        root.querySelector('#sorter-exclude').addEventListener('click', async () => {
+          await api.setExcluded(t.id, true);
+          next();
+        });
+      };
+
+      render();
+    },
+  });
+}
+
 /* ======================================================= SMS backup import */
 
 /** Import every bank SMS from an "SMS Backup & Restore" file in one go. */
@@ -719,9 +841,23 @@ export function openImportBackup() {
                 ${report.unreadable.length ? `${report.unreadable.length} bank messages weren't payments (reminders, offers, balances)<br/>` : ''}
                 ${report.refundsLinked ? `${report.refundsLinked} refunds matched to their payments<br/>` : ''}
               </div>
+              <div id="sort-offer"></div>
             </div>`;
           await api.markBackupImported();
           refreshCurrent();
+
+          const pending = (await api.untagged()).transactions.length;
+          if (pending) {
+            const offer = result.querySelector('#sort-offer');
+            offer.innerHTML = `
+              <div class="small muted" style="margin-top:10px">${pending} of these don't say what they were for.
+              Tag them now — one tap each, and places you tag once become one-tap buttons.</div>
+              <button class="btn btn-primary btn-block" id="start-sort" style="margin-top:10px">Sort ${pending} payments</button>`;
+            offer.querySelector('#start-sort').addEventListener('click', () => {
+              document.querySelector('.sheet-backdrop')?.click();
+              setTimeout(openSorter, 200);
+            });
+          }
         } catch (err) {
           result.innerHTML = `<div class="notice" style="border-color:var(--bad)"><span class="ico">⚠️</span>
             <div>${esc(err.message)}</div></div>`;
