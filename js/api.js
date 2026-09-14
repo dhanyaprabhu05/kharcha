@@ -6,6 +6,7 @@ import { parseSms, splitMessages, containsCredential } from './parser.js';
 import { resolveMerchant } from './merchants.js';
 import { CATEGORIES, categoryInfo, categorise, isCategory, isGuess, UNCATEGORISED } from './categories.js';
 import { formatInr, parsePaise } from './money.js';
+import { readSmsBackup } from './smsbackup.js';
 
 /* ----------------------------------------------------------- dates */
 
@@ -74,7 +75,10 @@ function resolveDay(parsedDay) {
   return { day: parsedDay, hasTime: parsedDay === isoDay(today) };
 }
 
-function buildRecord(parsed, source = 'sms') {
+/** `receivedAt` is when the phone received the SMS, known exactly for
+    messages read from a backup file. When present it is the best date there
+    is, and it also gives the time of day, which a pasted SMS lacks. */
+function buildRecord(parsed, source = 'sms', receivedAt = null) {
   let merchant = resolveMerchant(parsed.counterparty);
   if (parsed.instrument === 'atm') merchant = { key: 'atm', name: 'ATM withdrawal', isPerson: false };
 
@@ -87,12 +91,22 @@ function buildRecord(parsed, source = 'sms') {
     rules: store.rules(),
   });
 
-  const { day, hasTime } = resolveDay(parsed.day);
   const now = new Date();
+  let day;
+  let occurredAt;
+  let hasTime;
+  if (receivedAt instanceof Date && !Number.isNaN(receivedAt.getTime())) {
+    day = isoDay(receivedAt);
+    occurredAt = receivedAt.toISOString();
+    hasTime = true;
+  } else {
+    ({ day, hasTime } = resolveDay(parsed.day));
+    occurredAt = hasTime ? now.toISOString() : `${day}T12:00:00`;
+  }
   return {
     fingerprint: fingerprintOf(parsed.body),
     day,
-    occurred_at: hasTime ? now.toISOString() : `${day}T12:00:00`,
+    occurred_at: occurredAt,
     has_time: hasTime,
     amount_paise: parsed.amountPaise,
     direction: parsed.direction,
@@ -338,12 +352,16 @@ async function linkRefund(refund) {
   return true;
 }
 
-/** Save every readable payment in the pasted text. */
-async function importText(text) {
+/** Save every readable payment among `messages` ({ body, receivedAt? }).
+
+    Shared by pasting, sharing and backup import, so all three apply exactly
+    the same rules: credentials refused, duplicates skipped, refunds matched. */
+async function importMessages(messages, { recordUnreadable = true } = {}) {
   const report = { added: [], duplicates: 0, credentials: 0, unreadable: [], refundsLinked: 0 };
+  const known = new Set(store.allTransactions().map((t) => t.fingerprint));
   const records = [];
 
-  for (const body of splitMessages(text)) {
+  for (const { body, receivedAt = null } of messages) {
     // Checked here as well as in the parser: nothing credential-shaped is
     // ever written anywhere, not even to the "couldn't read" list.
     if (containsCredential(body)) { report.credentials += 1; continue; }
@@ -351,16 +369,14 @@ async function importText(text) {
     const parsed = parseSms(body);
     if (!parsed.ok) {
       report.unreadable.push({ body, reason: parsed.reason, message: explainRejection(parsed.reason) });
-      if (parsed.reason === 'no_amount') {
+      if (recordUnreadable && parsed.reason === 'no_amount') {
         await store.addUnparsed({ fingerprint: fingerprintOf(body), body, reason: parsed.reason, at: new Date().toISOString() });
       }
       continue;
     }
-    const record = buildRecord(parsed);
-    if (store.hasFingerprint(record.fingerprint) || records.some((r) => r.fingerprint === record.fingerprint)) {
-      report.duplicates += 1;
-      continue;
-    }
+    const record = buildRecord(parsed, 'sms', receivedAt);
+    if (known.has(record.fingerprint)) { report.duplicates += 1; continue; }
+    known.add(record.fingerprint);
     records.push(record);
   }
 
@@ -371,6 +387,35 @@ async function importText(text) {
   report.added = saved.map((row) => present(store.getTransaction(row.id) || row));
   if (saved.length) await store.requestPersistence();
   return report;
+}
+
+/** Save every readable payment in pasted or shared text. */
+const importText = (text) => importMessages(splitMessages(text).map((body) => ({ body })));
+
+/** Import a whole "SMS Backup & Restore" file.
+
+    Only received messages from bank-style sender IDs are considered, so
+    personal chats in the backup are never parsed. The file is read here, on
+    the phone; nothing in it is sent anywhere, and only payments are kept. */
+async function importSmsBackup(xml) {
+  const { messages, total, sent, personal } = readSmsBackup(xml);
+  if (total === 0) {
+    throw new Error("That file doesn't look like an SMS Backup & Restore backup (no messages found).");
+  }
+  // Oldest first, so a reversal is always processed after the payment it undoes.
+  messages.sort((a, b) => a.receivedAt - b.receivedAt);
+  const report = await importMessages(messages, { recordUnreadable: false });
+
+  const days = report.added.map((t) => t.day).sort();
+  return {
+    ...report,
+    scanned: total,
+    bankMessages: messages.length,
+    skippedSent: sent,
+    skippedPersonal: personal,
+    from: days[0] || null,
+    to: days[days.length - 1] || null,
+  };
 }
 
 /* ------------------------------------------------------------ backup */
@@ -447,6 +492,7 @@ export const api = {
       merchant_rules: Object.keys(store.rules()).length,
       has_demo: store.allTransactions().some((t) => t.source === 'demo'),
       persistent: await store.persistenceStatus(),
+      last_backup_import: store.meta('last_backup_import'),
     };
   },
 
@@ -499,6 +545,7 @@ export const api = {
 
   preview: async (text) => preview(text),
   importText,
+  importSmsBackup,
   exportData: async () => exportData(),
   importBackup,
 
@@ -508,6 +555,7 @@ export const api = {
     return { removed: ids.length };
   },
   async clearAll() { await store.clearAll(); return { ok: true }; },
+  async markBackupImported() { await store.setMeta('last_backup_import', new Date().toISOString()); },
   async addDemo(rows) { return store.addTransactions(rows); },
 
   buildDemoRecord(body, source = 'demo') {

@@ -25,6 +25,7 @@ import { parseSms, splitMessages } from './js/parser.js';
 import { resolveMerchant } from './js/merchants.js';
 import { categorise, selfCheck } from './js/categories.js';
 import { parsePaise, formatInr } from './js/money.js';
+import { readSmsBackup, isBankSender } from './js/smsbackup.js';
 
 const results = [];
 
@@ -136,6 +137,64 @@ check('paste: one SMS that wrapped over two lines stays one', () => {
   const cut = body.indexOf('; ');
   const parts = splitMessages(body.slice(0, cut) + '\n' + body.slice(cut));
   return parts.length === 1 ? [] : [`got ${parts.length}`];
+});
+
+/* ---- SMS Backup & Restore files ---- */
+const BACKUP = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!--File Created By SMS Backup & Restore v10.20.002 on 14/09/2026 13:22:02-->
+<smses count="7" backup_set="abc" backup_date="1789372922000" type="full">
+  <sms protocol="0" address="AD-ICICIB" date="1789290000000" type="1" subject="null" body="ICICI Bank Acct XX123 debited for Rs 250.00 on 13-Sep-26; ZOMATO credited. UPI:525500000001. Call 18002662 for dispute." toa="null" sc_toa="null" service_center="+919845087001" read="1" status="-1" locked="0" date_sent="1789289990000" sub_id="1" readable_date="13 Sep 2026 10:30:00" contact_name="(Unknown)" />
+  <sms protocol="0" address="JD-ICICIT" date="1789300000000" type="1" body="ICICI Bank Acct XX123 debited for Rs 1,499.00 on 13-Sep-26; M&amp;S RETAIL &gt; STORE credited.&#10;UPI:525500000002. Call 18002662 for dispute." read="1" />
+  <sms protocol="0" address="AD-ICICIB" date="1789310000000" type="1" body="OTP is 483920 for txn of INR 999.00. Do not share OTP with anyone." read="1" />
+  <sms protocol="0" address="AD-ICICIB" date="1789320000000" type="2" body="ICICI Bank Acct XX123 debited for Rs 5.00 on 13-Sep-26; TEST credited. UPI:525500000003." read="1" />
+  <sms protocol="0" address="+919876543210" date="1789330000000" type="1" body="I paid Rs 500 for the tickets, send me your share" read="1" />
+  <mms date="1789340000000" msg_box="1" address="+919876543210"><parts><part seq="0" ct="image/jpeg" data="/9j/4AAQSkZJRgABAQAAAQABAAD&gt;&lt;sms fake=&quot;1&quot;/&gt;" /></parts></mms>
+  <sms protocol="0" address='VM-ICICIB' date='1789350000000' type='1' body='Rs 649.00 will be debited from your ICICI Bank Acct XX123 on 03-Oct-26 towards NETFLIX for UPI-Mandate.' read='1' />
+  <sms protocol="0" address="AD-ICICIB" date="1789360000000" type="1" body="ICICI Bank Acct XX123 debited for Rs 64.00 on 14-Sep-26; RIDE > CITY CABS credited. UPI:525500000004. Call 18002662 for dispute." read="1" />
+</smses>`;
+
+check('backup: every <sms> element is found, MMS ignored', () => {
+  const r = readSmsBackup(BACKUP);
+  return r.total === 7 ? [] : [`total ${r.total} ≠ 7`];
+});
+check('backup: sent messages and personal SMS are skipped', () => {
+  const r = readSmsBackup(BACKUP);
+  const problems = [];
+  if (r.sent !== 1) problems.push(`sent ${r.sent} ≠ 1`);
+  if (r.personal !== 1) problems.push(`personal ${r.personal} ≠ 1`);
+  if (r.messages.some((m) => m.body.includes('tickets'))) problems.push('a personal SMS got through');
+  return problems;
+});
+check('backup: escape codes are decoded (&amp; &gt; &#10;)', () => {
+  const m = readSmsBackup(BACKUP).messages.find((x) => x.body.includes('1,499'));
+  if (!m) return ['message missing'];
+  return m.body.includes('M&S RETAIL > STORE credited.\nUPI') ? [] : [`body: ${JSON.stringify(m.body)}`];
+});
+check('backup: a raw ">" inside an SMS does not cut it short', () => {
+  const m = readSmsBackup(BACKUP).messages.find((x) => x.body.includes('CITY CABS'));
+  return m && m.body.endsWith('for dispute.') ? [] : [`body: ${m && m.body}`];
+});
+check('backup: single-quoted attributes are read', () => {
+  return readSmsBackup(BACKUP).messages.some((x) => x.body.includes('NETFLIX')) ? [] : ['single-quoted SMS missing'];
+});
+check('backup: the SMS timestamp is kept', () => {
+  const m = readSmsBackup(BACKUP).messages[0];
+  return m.receivedAt instanceof Date && m.receivedAt.getTime() === 1789290000000 ? [] : [`got ${m.receivedAt}`];
+});
+check('backup: of the bank messages, exactly the real payments parse', () => {
+  const parsed = readSmsBackup(BACKUP).messages.map((m) => parseSms(m.body));
+  const ok = parsed.filter((p) => p.ok).map((p) => p.amountPaise);
+  // Zomato 250, M&S 1,499, cab 64. The OTP and the autopay reminder must not.
+  return JSON.stringify(ok.sort((a, b) => a - b)) === JSON.stringify([6400, 25000, 149900])
+    ? [] : [`parsed amounts: ${ok}`];
+});
+check('backup: a phone number is never a bank sender', () => {
+  const cases = [['+919876543210', false], ['9876543210', false], ['AD-ICICIB', true], ['JD-ICICIT', true], ['VM-HDFCBK', true], ['TX-AMAZON', false]];
+  return cases.filter(([a, want]) => isBankSender(a) !== want).map(([a, want]) => `${a} -> ${!want}`);
+});
+check('backup: an empty or wrong file finds nothing', () => {
+  const r = readSmsBackup('<html><body>not a backup</body></html>');
+  return r.total === 0 ? [] : [`found ${r.total}`];
 });
 
 /* ---- render ---- */

@@ -23,6 +23,16 @@ your data safe when the phone runs low on space.
 
 ## Adding payments
 
+**All your past SMS at once:** install **SMS Backup & Restore** from the Play
+Store, back up **Messages** to your phone, then in Kharcha tap **⚙ → Import SMS
+backup** and pick the file. Every bank payment in it is added in one go, dated
+by when the SMS actually arrived. Personal chats, messages you sent, and OTPs
+are skipped. The file is read on the phone and never uploaded.
+
+**Staying up to date without pasting:** turn on *scheduled backups* (daily) in
+SMS Backup & Restore. Whenever you open Kharcha, tap **Catch up from latest SMS
+backup** and pick the newest file. Only new payments are added.
+
 **Copy and paste** (always works): long-press the bank SMS → **Copy** → open
 Kharcha → **Paste SMS**. The payment is saved immediately, with an **Undo**.
 

@@ -5,7 +5,7 @@
    the latest copy in the background, and use it next time. Bump VERSION on
    every release so old files are cleared out. */
 
-const VERSION = 'kharcha-v1';
+const VERSION = 'kharcha-v2';
 const FILES = [
   './',
   './index.html',
@@ -24,11 +24,16 @@ const FILES = [
   './js/ui.js',
   './js/views.js',
   './js/demo.js',
+  './js/smsbackup.js',
 ];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(VERSION).then((cache) => cache.addAll(FILES)).then(() => self.skipWaiting()),
+    // cache: 'reload' skips the browser's HTTP cache, so an update never
+    // installs yesterday's copy of a file.
+    caches.open(VERSION)
+      .then((cache) => cache.addAll(FILES.map((f) => new Request(f, { cache: 'reload' }))))
+      .then(() => self.skipWaiting()),
   );
 });
 

@@ -50,6 +50,10 @@ export async function renderToday(root) {
       </div>
 
       ${pasteButton()}
+      ${stats.last_backup_import ? `
+        <button class="btn btn-ghost btn-sm btn-block" id="catch-up" style="margin-top:10px">
+          📥 Catch up from latest SMS backup
+        </button>` : ''}
 
       ${s.uncategorised_count > 0 ? `
         <div style="margin-top:12px">
@@ -72,6 +76,8 @@ export async function renderToday(root) {
     wirePasteButton(root);
     wireDemoBanner(root);
     wireTransactions(root);
+    const catchUp = root.querySelector('#catch-up');
+    if (catchUp) catchUp.addEventListener('click', openImportBackup);
   } catch (err) {
     showError(root, err, () => renderToday(root));
   }
@@ -94,6 +100,10 @@ function onboarding() {
         and never saves the same one twice.
       </div>
     </div>
+    <button class="btn btn-primary btn-block" id="import-history" style="margin-top:12px">
+      Import all my past bank SMS
+    </button>
+    <div class="paste-hint">Adds last month (and more) in one go, from an SMS backup file</div>
     ${pasteButton()}
     <div style="text-align:center;margin-top:18px">
       <button class="btn btn-ghost btn-sm" id="load-demo">Try it with sample data first</button>
@@ -107,6 +117,7 @@ function onboarding() {
 
 function wireOnboarding(root) {
   wirePasteButton(root);
+  root.querySelector('#import-history').addEventListener('click', openImportBackup);
   root.querySelector('#load-demo').addEventListener('click', async (event) => {
     event.currentTarget.disabled = true;
     const count = await loadDemo();
@@ -554,6 +565,9 @@ export function openAddSheet({ tab = 'sms', text = '' } = {}) {
       <div class="small faint" style="margin-top:10px">
         Tip: long-press the SMS in your Messages app, tap Copy, then long-press the box above and Paste.
       </div>
+      <button class="btn btn-ghost btn-sm btn-block" id="goto-import" style="margin-top:12px">
+        Lots of SMS? Import a whole backup file instead
+      </button>
     </div>
 
     <div data-pane="cash" ${tab === 'cash' ? '' : 'hidden'}>
@@ -604,6 +618,10 @@ export function openAddSheet({ tab = 'sms', text = '' } = {}) {
         }).join('')}</div>`;
       };
       textarea.addEventListener('input', renderPreview);
+      box.querySelector('#goto-import').addEventListener('click', () => {
+        close();
+        setTimeout(openImportBackup, 180);
+      });
       if (text) renderPreview(); else if (tab === 'sms') textarea.focus();
 
       saveButton.addEventListener('click', async () => {
@@ -639,6 +657,82 @@ export function openAddSheet({ tab = 'sms', text = '' } = {}) {
   });
 }
 
+/* ======================================================= SMS backup import */
+
+/** Import every bank SMS from an "SMS Backup & Restore" file in one go. */
+export function openImportBackup() {
+  sheet(`
+    <h2>Import all your bank SMS</h2>
+    <p class="sub">Adds every past payment at once: last month, or as far back as your phone keeps SMS.</p>
+
+    <div class="section-title" style="margin-top:0">First time</div>
+    <ol class="steps">
+      <li>Install <strong>SMS Backup &amp; Restore</strong> from the <strong>Play Store</strong>.</li>
+      <li>Open it → <strong>Set up a backup</strong> → turn on <strong>Messages</strong> only (Calls not needed).</li>
+      <li>Choose <strong>Your phone</strong> as the place to save it → <strong>Back up now</strong>.</li>
+      <li>Come back here and tap <strong>Choose backup file</strong>.</li>
+    </ol>
+
+    <label class="btn btn-primary btn-block" for="backup-file" style="margin-top:16px">Choose backup file</label>
+    <input type="file" id="backup-file" hidden />
+    <div id="import-result" style="margin-top:14px"></div>
+
+    <div class="notice info" style="margin-top:14px">
+      <span class="ico">🔒</span>
+      <div>The file is read <strong>on this phone only</strong>. Kharcha looks only at messages
+      from bank sender IDs, skips anything you sent, refuses OTPs, and keeps nothing but
+      the payments. Payments you've already added are never counted twice.</div>
+    </div>
+
+    <div class="small faint" style="margin-top:12px">
+      <strong>Staying up to date:</strong> in SMS Backup &amp; Restore, turn on
+      <strong>scheduled backups</strong> (daily). Then whenever you like, tap Import here
+      and pick the newest file. Only the new payments get added.
+    </div>
+  `, {
+    onMount(box) {
+      const input = box.querySelector('#backup-file');
+      const result = box.querySelector('#import-result');
+
+      input.addEventListener('change', async () => {
+        const file = input.files[0];
+        if (!file) return;
+        const megabytes = (file.size / 1048576).toFixed(1);
+        result.innerHTML = `<div class="card pad small muted" style="display:flex;gap:10px;align-items:center">
+          <span class="spinner" style="color:var(--accent)"></span>
+          Reading ${esc(file.name)} (${megabytes} MB)…</div>`;
+        try {
+          const report = await api.importSmsBackup(await file.text());
+          const added = report.added.length;
+          const spent = report.added.filter((t) => t.direction === 'debit').reduce((s, t) => s + t.amount_paise, 0);
+          result.innerHTML = `
+            <div class="card pad">
+              <div style="font-weight:680;font-size:16px">
+                ${added ? `Added ${added} payment${added === 1 ? '' : 's'}` : 'Nothing new to add'}
+              </div>
+              ${added ? `<div class="muted small" style="margin-top:3px">
+                ${esc(dayLabel(report.from))} to ${esc(dayLabel(report.to))} · ${esc(inr(spent))} spent</div>` : ''}
+              <div class="small faint" style="margin-top:9px;line-height:1.7">
+                ${report.scanned} messages in the file · ${report.bankMessages} from banks<br/>
+                ${report.duplicates ? `${report.duplicates} already saved, skipped<br/>` : ''}
+                ${report.credentials ? `${report.credentials} OTP / password messages refused<br/>` : ''}
+                ${report.unreadable.length ? `${report.unreadable.length} bank messages weren't payments (reminders, offers, balances)<br/>` : ''}
+                ${report.refundsLinked ? `${report.refundsLinked} refunds matched to their payments<br/>` : ''}
+              </div>
+            </div>`;
+          await api.markBackupImported();
+          refreshCurrent();
+        } catch (err) {
+          result.innerHTML = `<div class="notice" style="border-color:var(--bad)"><span class="ico">⚠️</span>
+            <div>${esc(err.message)}</div></div>`;
+        } finally {
+          input.value = '';
+        }
+      });
+    },
+  });
+}
+
 /* ============================================================== settings */
 
 export async function openSettings() {
@@ -654,6 +748,11 @@ export async function openSettings() {
     <p class="sub">${stats.transactions} payment${stats.transactions === 1 ? '' : 's'} saved${stats.tracking_since ? ` since ${esc(dayLabel(stats.tracking_since))}` : ''} · ${stats.merchant_rules} shop${stats.merchant_rules === 1 ? '' : 's'} you've taught it</p>
 
     <div class="card">
+      <button class="settings-row" id="import-backup">
+        <span>📥</span><span class="sr-main">Import SMS backup<div class="sr-sub">${stats.last_backup_import
+          ? `Last imported ${esc(dayLabel(stats.last_backup_import.slice(0, 10)))}`
+          : 'Add all your past bank SMS at once'}</div></span>
+      </button>
       <button class="settings-row" id="export">
         <span>💾</span><span class="sr-main">Back up<div class="sr-sub">Save all your payments to a file</div></span>
       </button>
@@ -678,6 +777,11 @@ export async function openSettings() {
     </div>
   `, {
     onMount(box, close) {
+      box.querySelector('#import-backup').addEventListener('click', () => {
+        close();
+        setTimeout(openImportBackup, 180);
+      });
+
       box.querySelector('#export').addEventListener('click', async () => {
         const json = await api.exportData();
         const blob = new Blob([json], { type: 'application/json' });

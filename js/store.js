@@ -83,7 +83,13 @@ export function hasFingerprint(fingerprint) {
 
 /** Insert new transactions. Rows whose fingerprint already exists are skipped. */
 export async function addTransactions(rows) {
-  const fresh = rows.filter((r) => !hasFingerprint(r.fingerprint));
+  const known = new Set([...cache.transactions.values()].map((t) => t.fingerprint));
+  const fresh = [];
+  for (const row of rows) {
+    if (known.has(row.fingerprint)) continue;
+    known.add(row.fingerprint);
+    fresh.push(row);
+  }
   if (!fresh.length) return [];
   const tx = db.transaction('transactions', 'readwrite');
   const store = tx.objectStore('transactions');
