@@ -88,6 +88,16 @@ async function boot() {
   });
 
   if ('serviceWorker' in navigator && window.isSecureContext) {
+    // When an update takes over, reload once so it's used straight away,
+    // instead of only on the next launch. Skipped on the very first install,
+    // when the page already came from the network and there's nothing to swap.
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloaded) return;
+      reloaded = true;
+      location.reload();
+    });
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
   window.addEventListener('offline', () => toast('You are offline. Kharcha still works: it never needs the internet.'));
