@@ -532,8 +532,34 @@ async function importBackup(json) {
   const rows = data.transactions
     .filter((t) => t && t.fingerprint && Number.isInteger(t.amount_paise) && t.day)
     .map(({ id, ...rest }) => rest);   // fresh ids; fingerprints prevent doubles
+
+  // A payment that's already here (say the Android app read the same SMS from
+  // the inbox) isn't added again, but what you set on it by hand is carried
+  // over: its category and name, a "don't count", a note. Only onto payments
+  // you haven't changed since, so an older backup never undoes newer edits.
+  const existing = new Map(store.allTransactions().map((t) => [t.fingerprint, t]));
+  const merged = [];
+  for (const row of rows) {
+    const here = existing.get(row.fingerprint);
+    if (!here) continue;
+    const next = { ...here };
+    if (row.category_source === 'user' && here.category_source !== 'user' && isCategory(row.category)) {
+      Object.assign(next, {
+        category: row.category, category_source: 'user',
+        merchant_key: row.merchant_key, merchant_name: row.merchant_name, is_person: row.is_person,
+      });
+    }
+    if (row.excluded && !here.excluded) next.excluded = true;
+    if (row.note && !here.note) next.note = row.note;
+    if (next.category !== here.category || next.merchant_name !== here.merchant_name
+        || next.excluded !== here.excluded || next.note !== here.note) {
+      merged.push(next);
+    }
+  }
+  await store.updateTransactions(merged);
+
   const saved = await store.addTransactions(rows);
-  return { restored: saved.length, skipped: rows.length - saved.length };
+  return { restored: saved.length, updated: merged.length, skipped: rows.length - saved.length - merged.length };
 }
 
 /* --------------------------------------------------------------- api */

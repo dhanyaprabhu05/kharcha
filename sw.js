@@ -5,7 +5,7 @@
    the latest copy in the background, and use it next time. Bump VERSION on
    every release so old files are cleared out. */
 
-const VERSION = 'kharcha-v6';
+const VERSION = 'kharcha-v7';
 const FILES = [
   './',
   './index.html',

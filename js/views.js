@@ -1096,7 +1096,10 @@ export async function openSettings() {
         if (!file) return;
         try {
           const result = await api.importBackup(await file.text());
-          toast(`Restored ${result.restored} payment${result.restored === 1 ? '' : 's'}${result.skipped ? ` (${result.skipped} already here)` : ''}.`, 'good');
+          const parts = [`Restored ${result.restored} payment${result.restored === 1 ? '' : 's'}`];
+          if (result.updated) parts.push(`your tags copied onto ${result.updated} already here`);
+          if (result.skipped) parts.push(`${result.skipped} already up to date`);
+          toast(`${parts.join(', ')}.`, 'good');
           close();
           refreshCurrent();
         } catch (err) {
